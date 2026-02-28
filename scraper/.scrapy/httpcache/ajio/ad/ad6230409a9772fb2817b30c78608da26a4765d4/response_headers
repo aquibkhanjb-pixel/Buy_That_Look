@@ -1,0 +1,20 @@
+Content-Length: 15740
+X-Dns-Prefetch-Control: off
+X-Frame-Options: ALLOW-FROM https://microapps.google.com/
+Strict-Transport-Security: max-age=15552000; includeSubDomains
+X-Download-Options: noopen
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+Content-Type: application/json; charset=utf-8
+Etag: W/"1ee91-bFrNtUzGBNzZDnqotB4gmqRb0oA"
+Content-Encoding: gzip
+Cache-Control: max-age=300
+Expires: Wed, 18 Feb 2026 19:33:22 GMT
+Date: Wed, 18 Feb 2026 19:28:22 GMT
+Vary: Accept-Encoding
+Set-Cookie: ADRUM_BT=R:21|i:4822|g:d9d13621-d006-482a-852e-c62ba157f46f7256171|e:5383|s:f|n:customer1_be12de70-87be-45ee-86d9-ba878ff9a400; Path=/; Expires=Wed, 18 Feb 2026 19:28:52 GMT
+Set-Cookie: TS01d405db=015d0fa226863a6083750f3fe867f34eaa963c5e4b7d2a4655814512b7444bbbda36917637803b9d3e20381e6010012802e9f0079e01b210aa9e19dee1213b4132cc79b738a4bf408d0dacf751fee7448d951ed55fae1878a1ba3006d20b8cd95f353ff4c6; Path=/; Domain=.ajio.com
+Set-Cookie: ak_bmsc=6580E0198A66378BF9A2FDC50F01A6C8~000000000000000000000000000000~YAAQzaJeym11rmScAQAAZZc5ch6iUwIGtVaAq6jqPLkFS8PcetT88AwXVpVyaZcPhJ9KektJMt0PzrJxsIPERQj5/rjXtrNGjafh1v6J/eWNG3Mr47olyE8/XknKpuO4RfCqetmQKqZcjU4P61vMqnT1DPeSyScYtOP/lgJcf0DXwNW4XScZq/GJ4Ed9B4MHHf0k8QphooGTVW6fYV9aOGDZoZQXwtK2YLL5akkYao1p55Ev6YmZPJuvCv5kZAd4YtjoDy/5H/sKL7wM9f1oeH/mwD+PI7sqgSZ3l8c/FDg9xebMbCrpStExCnGYGcTe4DBD+ttcSrpmz/qe/p1EPjgdjqPqagfbQZsYPQ==; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:28:20 GMT; Max-Age=7198; HttpOnly
+Alt-Svc: h3=":443"; ma=93600
+Akamai-Cache-Status: Miss from child, Miss from parent
+Akamai-Grn: 0.cda25eca.1771442900.1a4bfd63

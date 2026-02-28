@@ -1,0 +1,21 @@
+Content-Length: 22012
+X-Dns-Prefetch-Control: off
+X-Frame-Options: ALLOW-FROM https://microapps.google.com/
+Strict-Transport-Security: max-age=15552000; includeSubDomains
+X-Download-Options: noopen
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+Content-Type: application/json; charset=utf-8
+Etag: W/"242c7-yHV7HiTdhDiyDFMvhmiWr6ZfgMQ"
+Content-Encoding: gzip
+Cache-Control: max-age=300
+Expires: Wed, 18 Feb 2026 19:34:55 GMT
+Date: Wed, 18 Feb 2026 19:29:55 GMT
+Vary: Accept-Encoding
+Set-Cookie: ADRUM_BT=R:21|i:6210|g:29a58801-d349-45d6-a994-31c046f269347223668|e:318|n:customer1_be12de70-87be-45ee-86d9-ba878ff9a400; Path=/; Expires=Wed, 18 Feb 2026 19:30:25 GMT
+Set-Cookie: TS01d405db=015d0fa2267133aff7f071dab60086918fea8cf54e289f31b16f8ba46f6dc4f3a3a04c628da288fca055017634f24742b0f719866eef9a2e5607917ed78cf858b99c5e89f6e01e3bc1c5741a1a3b493a10c0901ad8a598a8d5b64653856fb7e6414989fd02; Path=/; Domain=.ajio.com
+Set-Cookie: ak_bmsc=A930EC58CC17C27124596CD7C897FDC7~000000000000000000000000000000~YAAQzaJeyq6GrmScAQAAT/86ch5yagmQMH6GRA0/zlZ7ClWLw/lkkdwYgEnot4wmInwr77nJZNn9PLhM1JSzYVv9E0TL4PTwMO/6CoxCmIjGs2EcZRlh4P2m9Qe9DwcJD0vG3NfXQyWlzYTMynKkkojhljSZBj6M7P59ojBSz4iCDgcNRG2v46/9WDMLYHCwTkzH1n5VTBk9/SjPWBQRnwfuPFcEwqRXx/B3kenDtrqjLOmTIYp8w2dzCxFEMT2ky5UAk5Uu1SXnWeWDjj0GqwVQHu51Md1WR7C/hxkwsrXomnGs6F1NKoV3jemxFvFd14ndZO01Ws6wLnF1ZR/7JeZL29QZoAUkDmbn9Q8OMkiiDGuNxdChtGwbAGyufefZbUhY8iSfdwXIPbdxNLWR5FU=; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:28:51 GMT; Max-Age=7136; HttpOnly
+Set-Cookie: bm_sv=3CB58424135016B866A9B88095DE9B7F~YAAQzaJeyq+GrmScAQAAT/86ch7Xed1aff2lSAi4rIWdfm7rguvDi5hw4mzs0cSjq72QNvHlfHNwxYMpi+oQQcL4GBZJf85+KgDt5JaCBjuGfj7IYS+WTJK0vUTc78/uoBjb7Sqp5+jFy8ydfKCS9nLs9covmm9Xwk/E36IWEAddp8KAgF20XIEW1QvUsfS2F8XxYF8KgsjvXcIaDvLcV0L3Dk2Z9yA5k8Y/21PlgyehMz4zuvDKQOUmv5fuaA==~1; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 19:29:52 GMT; Max-Age=0; Secure
+Alt-Svc: h3=":443"; ma=93600
+Akamai-Cache-Status: Miss from child, Miss from parent
+Akamai-Grn: 0.cda25eca.1771442992.1a4d0751

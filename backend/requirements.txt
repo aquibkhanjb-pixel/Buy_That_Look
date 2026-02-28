@@ -1,0 +1,49 @@
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# ML/AI — Install torch FIRST, then CLIP (see install instructions below)
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.36.0
+ftfy>=6.1.0
+regex>=2023.0.0
+
+# CLIP — installed separately (see TESTING_GUIDE.md for full instructions)
+# Do NOT uncomment — install manually in this order:
+#   pip install "setuptools<70"
+#   pip install git+https://github.com/openai/CLIP.git --no-build-isolation
+#   pip install --upgrade setuptools
+
+# Vector search
+faiss-cpu>=1.7.4
+
+# Image processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# Caching
+redis>=5.0.0
+
+# Utilities
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+httpx>=0.25.0
+aiofiles>=23.2.0
+
+# Rate limiting
+slowapi>=0.1.9
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Logging
+loguru>=0.7.0

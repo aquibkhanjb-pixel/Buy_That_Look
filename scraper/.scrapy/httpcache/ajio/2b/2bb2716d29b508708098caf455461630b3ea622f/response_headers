@@ -1,0 +1,21 @@
+Content-Length: 32899
+X-Dns-Prefetch-Control: off
+X-Frame-Options: ALLOW-FROM https://microapps.google.com/
+Strict-Transport-Security: max-age=15552000; includeSubDomains
+X-Download-Options: noopen
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+Content-Type: application/json; charset=utf-8
+Etag: W/"36d60-d/7Fh01cJdIyen2E9q0f7GLZaY0"
+Content-Encoding: gzip
+Cache-Control: max-age=300
+Expires: Wed, 18 Feb 2026 19:34:47 GMT
+Date: Wed, 18 Feb 2026 19:29:47 GMT
+Vary: Accept-Encoding
+Set-Cookie: ADRUM_BT=R:21|i:6210|g:772cba47-216b-4247-b360-b7b15f648e2a7218875|e:1965|n:customer1_be12de70-87be-45ee-86d9-ba878ff9a400; Path=/; Expires=Wed, 18 Feb 2026 19:30:17 GMT
+Set-Cookie: TS01d405db=015d0fa22645b08348fe809e3461b5d07f2ceaeacc109655ffef00ac5fb4902e29fecf37c0178bc45917c2d16518f8dc70be6ce2339c4386765ff40b49a1651b26ddaed4d130ca918201f88f0b66435c40ceab6412e2d26e492639432522ce74a48bee65bf; Path=/; Domain=.ajio.com
+Set-Cookie: ak_bmsc=0FB7DA0AD77F44B68D411640AFF4A4CF~000000000000000000000000000000~YAAQx6JeyjXxsFCcAQAAQeI6ch6285JYsxmtcAfE+4y61ONoBpDR7rSwJqPkMwCUe56PO6hCmu6CHA/OLAQ+m7CZxK8TxCOmNYp2b9a7zBfCF7Q5L00Mowh9VV4pO8oCogZBhAD0ueh4Qa2Cq6/j+A+MOh7eGRSEoMPi0ZHEV78WPyTHmpdky8F4Q/sD7RJ6Rqs/i5xy8xojldCTAwxh5gdMKJ6h0cz2kDYoxpcpY8GGOIVeptpTtXUMiOG9CMQyf0XXipvJ5VZgPfiExy2FBUNGgOk2yU5OfnGVn470UikFiFkc81ypHAMvtHUuderUB2SDyGVcHm7tSjOasYP654AFRaMXWlkxha3i3V01jYpbktJWkL23HQZSFZDojc7YHGkNNj147Q==; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:28:54 GMT; Max-Age=7147; HttpOnly
+Set-Cookie: bm_sv=BDA67BE17AB83F88493B80AB932AFA69~YAAQx6JeyjbxsFCcAQAAQeI6ch77J+5sPQ8wm8Ln+ey+XGrRFQ4MUYiL2BmQwBbjAfwz2SaKD1tCwpIpOsj0QGCxk2aMBDN9jF+/Pzv4dFP8tn2VJh4DOpOMD5oldzpjxojBep/SGLJf1eJoNVh2YlOlD3prOxxG01N+QdF1X7WB6oy2p8CW0tlDEiyNcSOhDt/vQ/2ZyGx9ncBzviOg29SxNn3agj5fX8FucItJwuq06TXP6w8g1zNwU4lCHQ==~1; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:26:04 GMT; Max-Age=6977; Secure
+Alt-Svc: h3=":443"; ma=93600
+Akamai-Cache-Status: Miss from child, Miss from parent
+Akamai-Grn: 0.c7a25eca.1771442984.3b59b9a1

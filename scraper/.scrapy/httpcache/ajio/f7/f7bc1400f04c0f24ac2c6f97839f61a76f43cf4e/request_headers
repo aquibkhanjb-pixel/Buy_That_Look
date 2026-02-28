@@ -1,0 +1,6 @@
+Accept: application/json, text/plain, */*
+Accept-Language: en-IN,en;q=0.9
+Referer: https://www.ajio.com/
+Origin: https://www.ajio.com
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0
+Accept-Encoding: gzip, deflate, br, zstd

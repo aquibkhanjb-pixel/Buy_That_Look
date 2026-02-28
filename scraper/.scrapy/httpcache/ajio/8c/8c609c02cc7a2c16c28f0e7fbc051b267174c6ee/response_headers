@@ -1,0 +1,21 @@
+Content-Length: 35178
+X-Dns-Prefetch-Control: off
+X-Frame-Options: ALLOW-FROM https://microapps.google.com/
+Strict-Transport-Security: max-age=15552000; includeSubDomains
+X-Download-Options: noopen
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+Content-Type: application/json; charset=utf-8
+Etag: W/"592a1-/haPuLLk+V/PE6eknzlkf2QWqjI"
+Content-Encoding: gzip
+Cache-Control: max-age=300
+Expires: Wed, 18 Feb 2026 17:32:34 GMT
+Date: Wed, 18 Feb 2026 17:27:34 GMT
+Vary: Accept-Encoding
+Set-Cookie: ADRUM_BT=R:21|i:6210|g:dc5e477e-aba5-4a84-9db0-d33a277ae8f47202419|e:2705|n:customer1_be12de70-87be-45ee-86d9-ba878ff9a400; Path=/; Expires=Wed, 18 Feb 2026 17:28:04 GMT
+Set-Cookie: TS01d405db=015d0fa226418ff1a5c66b4e62f3485ff11bb0e725762a8295eadeb1ba47c5e6a62c485c5aa70d64f0378f7502dffc0fada5712e8d055591e7b5445f27d2b85f69d2e266798468e265163565b9858846d4dd601f6f48de5d19b021a196302f17723500e272; Path=/; Domain=.ajio.com
+Set-Cookie: ak_bmsc=23D2E5FBA2736B30742B98E55FB7BFBF~000000000000000000000000000000~YAAQx6JeytkarFCcAQAARv7KcR5bA717KhvT5jaLrpGzvHQP9bspiGGTGaZ1dbHqpDRS1Y7GJZq+O86blCG7UQfGvQ5ygUYyc+sU/rJ92r97NuAEMwuMhDIguc6EzpvFYtUatJEiw8BomnKLmhoB/04aC5bzVt30N1bjUfXIdiVgd4uhwyUfXmT9kZ7UogYFtbgO8yyvCo8x3Jc3ym4OJ+OHrkwXNv9mJ/Me4f2Ek1sVBVneT/eHWeaqy/AO9hWL7sd17wYKwJQDJqlOUVOUKPnRdVUYSSUPLyIow3JjoUkiJ2dYDiQr/+ro01lUaswsYJqskm2wulmoIeyQW2DE0233Lp1HwyqmgaWRQ+rIZmdKUwD1bRZVCd1fb/M=; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 19:26:58 GMT; Max-Age=7164; HttpOnly
+Set-Cookie: bm_sv=C1B1A630ADB4B0D448A05BF644B07EBE~YAAQx6JeytoarFCcAQAARv7KcR44z/R2/1pvSHHMXNZ23HymoKQeBC/7mp9IYY+gDY05hSdUDI+Y3MlBBUOUfOlYr/PJwzgMD9mFbBjvxjAoXMqh+BuYbPWHiez3ggvwjg4EQ/hThoaEF3NyC3N0vXm3SKVL+k+KLmPTjF4TdY5CaoGTfNKtG1S4HOF8ju83sSciw1VzQP2P1JRgcnura9lgBnSBCg8cxWecUftjVlrhMhN3CTpMUEIa5XeG4w==~1; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 19:27:34 GMT; Max-Age=7200; Secure
+Alt-Svc: h3=":443"; ma=93600
+Akamai-Cache-Status: Miss from child, Miss from parent
+Akamai-Grn: 0.c7a25eca.1771435649.3a8578c4

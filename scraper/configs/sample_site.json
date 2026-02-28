@@ -1,0 +1,55 @@
+{
+    "source_site": "sample_store",
+    "start_urls": [
+        "https://example.com/products/clothing"
+    ],
+    "allowed_domains": [
+        "example.com"
+    ],
+    "selectors": {
+        "title": [
+            "h1.product-title::text",
+            ".product-name::text"
+        ],
+        "price": [
+            ".price-current::text",
+            ".product-price::text"
+        ],
+        "original_price": [
+            ".price-was::text",
+            ".original-price::text"
+        ],
+        "description": [
+            ".product-description p::text",
+            "#description::text"
+        ],
+        "brand": [
+            ".brand-name::text",
+            ".product-brand::text"
+        ],
+        "category": [
+            ".breadcrumb li:last-child a::text",
+            ".category-path::text"
+        ],
+        "image": [
+            ".product-image img::attr(src)",
+            "#main-product-image::attr(src)"
+        ],
+        "images": [
+            ".product-gallery img::attr(src)",
+            ".thumbnail-list img::attr(data-src)"
+        ],
+        "product_links": [
+            ".product-card a.product-link::attr(href)",
+            ".product-grid-item > a::attr(href)"
+        ],
+        "next_page": [
+            "a.pagination-next::attr(href)",
+            ".next-page::attr(href)"
+        ]
+    },
+    "settings": {
+        "download_delay": 2,
+        "concurrent_requests": 4
+    }
+}

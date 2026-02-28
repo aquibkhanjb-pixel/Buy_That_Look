@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # ─── PostgreSQL Database ────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: fashion_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fashionuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fashionpass}
+      POSTGRES_DB: ${POSTGRES_DB:-fashiondb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fashionuser} -d ${POSTGRES_DB:-fashiondb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - fashion_network
+
+  # ─── Redis Cache ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fashion_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fashion_network
+
+  # ─── Backend API (FastAPI) ──────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fashion_backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fashionuser}:${POSTGRES_PASSWORD:-fashionpass}@postgres:5432/${POSTGRES_DB:-fashiondb}
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=${DEBUG:-false}
+      - CLIP_MODEL_NAME=${CLIP_MODEL_NAME:-ViT-B/32}
+      - MODEL_CACHE_DIR=/app/models
+      - FAISS_INDEX_PATH=/app/data/indices/fashion_products.index
+      - IMAGE_STORAGE_PATH=/app/data/images
+      - CORS_ORIGINS=["http://localhost:3000","http://frontend:3000"]
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - model_cache:/app/models
+      - ./data/images:/app/data/images
+      - ./data/indices:/app/data/indices
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - fashion_network
+
+  # ─── Frontend (Next.js) ────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}
+    container_name: fashion_frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT:-8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fashion_network
+
+  # ─── Scraper Service ───────────────────────────────────────────────
+  scraper:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    container_name: fashion_scraper
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fashionuser}:${POSTGRES_PASSWORD:-fashionpass}@postgres:5432/${POSTGRES_DB:-fashiondb}
+    volumes:
+      - ./data/images:/app/data/images
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - scraper
+    networks:
+      - fashion_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  model_cache:
+    driver: local
+
+networks:
+  fashion_network:
+    driver: bridge

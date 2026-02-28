@@ -1,0 +1,21 @@
+Content-Length: 27798
+X-Dns-Prefetch-Control: off
+X-Frame-Options: ALLOW-FROM https://microapps.google.com/
+Strict-Transport-Security: max-age=15552000; includeSubDomains
+X-Download-Options: noopen
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+Content-Type: application/json; charset=utf-8
+Etag: W/"31b1c-tZKpQp1dDGkj+QXkz6fytnvN+4g"
+Content-Encoding: gzip
+Cache-Control: max-age=300
+Expires: Wed, 18 Feb 2026 19:34:06 GMT
+Date: Wed, 18 Feb 2026 19:29:06 GMT
+Vary: Accept-Encoding
+Set-Cookie: ADRUM_BT=R:21|i:6210|g:385efe7a-ea05-4813-a316-133ea6478d237233615|e:124|n:customer1_be12de70-87be-45ee-86d9-ba878ff9a400; Path=/; Expires=Wed, 18 Feb 2026 19:29:36 GMT
+Set-Cookie: TS01d405db=015d0fa22645b08348fe809e3461b5d07f2ceaeacc109655ffef00ac5fb4902e29fecf37c0178bc45917c2d16518f8dc70be6ce2339c4386765ff40b49a1651b26ddaed4d130ca918201f88f0b66435c40ceab6412e2d26e492639432522ce74a48bee65bf; Path=/; Domain=.ajio.com
+Set-Cookie: ak_bmsc=79F603433735BF0A4C908B800009BC8F~000000000000000000000000000000~YAAQx6JeyljssFCcAQAAxEE6ch5HIlC9Ky4CpRGW9kiQKywkFK0+XMYUrIzE9KV9A9N7dzVU06L+m//m13gmirvKesApKgq4mV7rlATDFwDn4gkWP9sGrIKbawK5mkR6d5+GYxsAq13p4D4zSgHVvkek21MZp4JdNcp9zIzfueRYoXxgLo2KepidTzwyPv/1U4m9vW8hKa/cyKqRujf6jVi6zkp7MSFkiduBLLTABehOx4HBytXtanb0JUCeb/JM8WoM62Q4Blu6ErPOMnbO89gi4TPXLvl8RpdC/xpUK0xSfjqkwP0bOjG3qhMfskRzPQWsI5w/8GTQY+gN/ly3to4YZDB5GdWKMCus3gkq7fh1Te/GogdNQjA6OzzJrpYSjtvvnIWU9w==; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:28:24 GMT; Max-Age=7158; HttpOnly
+Set-Cookie: bm_sv=BDA67BE17AB83F88493B80AB932AFA69~YAAQx6JeylnssFCcAQAAxEE6ch7/X27GLGYntOirvEaCM2HGaBpanue9MzoIg+S5g96FjUaXPZaQXCTNxKdflePiSRz9+h9InTx33BND5R/LkXHo/3ERghbHyPCM3wrqFOSfn79E0AAjKuMPg17LItlzF+BD3cC4Py1G4GfJYptdgeNRaGQue1nfGDGqBM9Cx3bjvkyOU3l5xn/a3moKQ4sHVQktSwBY5tQdY5m9JbwIAvvPUT7KpNMpNS+ksg==~1; Domain=.ajio.com; Path=/; Expires=Wed, 18 Feb 2026 21:26:04 GMT; Max-Age=7018; Secure
+Alt-Svc: h3=":443"; ma=93600
+Akamai-Cache-Status: Miss from child, Miss from parent
+Akamai-Grn: 0.c7a25eca.1771442944.3b59118f

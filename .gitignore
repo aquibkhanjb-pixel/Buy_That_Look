@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+
+# Virtual environments
+venv/
+.env/
+fashion-ai/
+.conda/
+
+# Node
+node_modules/
+
+# ML Models
+*.pt
+*.pth
+*.onnx
+
+# Dataset
+data/
+datasets/
+
+# OS
+.DS_Store
+Thumbs.db
