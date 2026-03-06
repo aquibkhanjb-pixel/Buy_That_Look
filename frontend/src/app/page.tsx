@@ -22,6 +22,7 @@ export default function Home() {
   const [filters, setFilters] = useState<SearchFilters>({})
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
 
   const handleImageSearch = async (file: File) => {
     setIsLoading(true)
@@ -30,6 +31,7 @@ export default function Home() {
       const response = await searchByImage(file, 20, filters)
       setResults(response.results)
       setLatencyMs(response.latency_ms)
+      setHasSearched(true)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -45,6 +47,7 @@ export default function Home() {
       const response = await searchByText(query, 20, filters)
       setResults(response.results)
       setLatencyMs(response.latency_ms)
+      setHasSearched(true)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -60,6 +63,7 @@ export default function Home() {
       const response = await searchHybrid(file, query, alpha, 20, filters)
       setResults(response.results)
       setLatencyMs(response.latency_ms)
+      setHasSearched(true)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -80,6 +84,7 @@ export default function Home() {
     setResults([])
     setLatencyMs(null)
     setError(null)
+    setHasSearched(false)
   }
 
   return (
@@ -144,8 +149,23 @@ export default function Home() {
           </div>
         )}
 
-        {/* Empty State */}
-        {!isLoading && results.length === 0 && !error && (
+        {/* No Results Found — after a completed search */}
+        {!isLoading && hasSearched && results.length === 0 && !error && (
+          <div className="mt-12 text-center">
+            <div className="text-gray-300 mb-4">
+              <svg className="mx-auto h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-800">No matching products found</h3>
+            <p className="mt-2 text-gray-500 max-w-sm mx-auto">
+              We couldn&apos;t find any products matching your search. Try a different image, adjust your query, or remove some filters.
+            </p>
+          </div>
+        )}
+
+        {/* Initial Empty State — before any search */}
+        {!isLoading && !hasSearched && results.length === 0 && !error && (
           <div className="mt-12 text-center">
             <div className="text-gray-400 mb-4">
               <svg className="mx-auto h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
