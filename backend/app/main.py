@@ -21,6 +21,8 @@ from app.core.database import init_db
 from app.services.clip_service import clip_service
 from app.services.search_engine import search_engine
 from app.services.cache_service import cache_service
+from app.services.llm_service import llm_service
+from app.services.chat_service import chat_service
 
 settings = get_settings()
 
@@ -76,6 +78,18 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("No existing FAISS index found - creating empty index")
         search_engine.create_index(use_hnsw=False)
+
+    # Initialise LLM service
+    logger.info("Initialising LLM service...")
+    llm_service.initialize(settings.gemini_api_key)
+    if llm_service.is_enabled:
+        logger.info("LLM service ready (query expansion + re-ranking enabled)")
+    else:
+        logger.warning("LLM service disabled — search works but without AI re-ranking")
+
+    # Initialise Chat service (LangGraph)
+    chat_service.initialize()
+    logger.info("Chat service (LangGraph) initialised")
 
     logger.info("Application startup complete")
 

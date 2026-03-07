@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     default_search_k: int = 20
     max_search_k: int = 100
 
+    # LLM / Generative AI
+    gemini_api_key: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

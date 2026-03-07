@@ -21,6 +21,7 @@ from app.schemas.search import (
 from app.services.search_engine import search_engine
 from app.services.cache_service import cache_service
 from app.services.search_logger import search_logger
+from app.services.llm_service import llm_service
 from app.config import get_settings
 
 router = APIRouter()
@@ -51,6 +52,7 @@ def convert_to_search_results(raw_results: List[dict]) -> List[SearchResult]:
                 product_url=item.get("product_url", ""),
                 source_site=item.get("source_site", ""),
                 similarity=item.get("similarity", 0.0),
+                llm_score=item.get("llm_score"),
             )
             results.append(result)
         except Exception as e:
@@ -139,18 +141,53 @@ async def search_by_image(
             filters_applied=SearchFilters(**filters_dict) if filters_dict else None,
         )
 
-    # Perform search
-    raw_results = search_engine.search_by_image(
-        image_bytes=content,
-        k=k,
-        filters=filters_dict if filters_dict else None,
-    )
+    # Phase 2 — Gemini Vision: describe the uploaded image
+    # This gives CLIP a richer text query to combine with the visual embedding
+    image_description = llm_service.describe_image(content)
+
+    # Fetch more candidates so re-ranking has a larger pool
+    clip_k = min(k * 2, 50) if llm_service.is_enabled else k
+
+    if image_description:
+        # Hybrid: combine CLIP image embedding + Gemini Vision text description
+        from app.services.clip_service import clip_service
+        text_embedding = clip_service.encode_text(image_description)
+        image_embedding = clip_service.encode_image(content)
+
+        if image_embedding is not None and text_embedding is not None:
+            # 65% visual + 35% semantic from Gemini Vision description
+            hybrid_embedding = clip_service.compute_hybrid_embedding(
+                image_embedding, text_embedding, alpha=0.65
+            )
+            raw_results = search_engine.search(
+                hybrid_embedding, clip_k, filters_dict if filters_dict else None,
+                min_similarity=search_engine.MIN_SIMILARITY_IMAGE,
+            )
+        else:
+            raw_results = search_engine.search_by_image(
+                image_bytes=content, k=clip_k,
+                filters=filters_dict if filters_dict else None,
+            )
+    else:
+        raw_results = search_engine.search_by_image(
+            image_bytes=content, k=clip_k,
+            filters=filters_dict if filters_dict else None,
+        )
+
+    # Phase 1 — Re-rank using Gemini description (or generic fallback)
+    rerank_query = image_description or "fashion product matching the uploaded image"
+    if llm_service.is_enabled and raw_results:
+        raw_results = llm_service.rerank_results(rerank_query, raw_results)
 
     # Convert to response format
     results = convert_to_search_results(raw_results)
     latency_ms = int((time.time() - start_time) * 1000)
 
-    logger.info(f"Image search completed: {len(results)} results in {latency_ms}ms")
+    llm_used = llm_service.is_enabled
+    logger.info(
+        f"Image search completed: {len(results)} results in {latency_ms}ms "
+        f"(LLM={'on' if llm_used else 'off'})"
+    )
 
     # Log search to database
     image_hash = search_logger.hash_image(content)
@@ -172,6 +209,8 @@ async def search_by_image(
         latency_ms=latency_ms,
         total_results=len(results),
         filters_applied=SearchFilters(**filters_dict) if filters_dict else None,
+        llm_enhanced=llm_used,
+        expanded_query=image_description,
     )
 
 
@@ -212,12 +251,21 @@ async def search_by_text(
             filters_applied=body.filters,
         )
 
-    # Always use search_by_text for correct thresholds and normalization
+    # LLM Step 1: Expand the query into a richer fashion description
+    expanded_query = llm_service.expand_query(body.query)
+    search_query = expanded_query if expanded_query != body.query else body.query
+
+    # Fetch more candidates from CLIP so re-ranking has a larger pool to work with
+    clip_k = min(body.k * 2, 50) if llm_service.is_enabled else body.k
     raw_results = search_engine.search_by_text(
-        query=body.query,
-        k=body.k,
+        query=search_query,
+        k=clip_k,
         filters=filters_dict if filters_dict else None,
     )
+
+    # LLM Step 2: Re-rank results by relevance to the original query
+    if llm_service.is_enabled and raw_results:
+        raw_results = llm_service.rerank_results(body.query, raw_results)
 
     # Convert to response format
     results = convert_to_search_results(raw_results)
@@ -226,7 +274,11 @@ async def search_by_text(
     # Cache the search results
     cache_service.set_search_results("text", body.query, filters_dict, body.k, raw_results)
 
-    logger.info(f"Text search '{body.query[:50]}': {len(results)} results in {latency_ms}ms")
+    llm_used = llm_service.is_enabled
+    logger.info(
+        f"Text search '{body.query[:50]}': {len(results)} results in {latency_ms}ms "
+        f"(LLM={'on' if llm_used else 'off'})"
+    )
 
     # Log search to database
     top_ids = [r.id for r in results[:5]]
@@ -247,6 +299,8 @@ async def search_by_text(
         latency_ms=latency_ms,
         total_results=len(results),
         filters_applied=body.filters,
+        expanded_query=expanded_query if expanded_query != body.query else None,
+        llm_enhanced=llm_used,
     )
 
 
@@ -346,9 +400,13 @@ async def search_hybrid(
         image_embedding, text_embedding, alpha
     )
 
-    # Search with hybrid threshold
+    # LLM Step 1: expand the text part of the hybrid query
+    expanded_query = llm_service.expand_query(query)
+
+    # Search with hybrid threshold — fetch larger pool if LLM is on
+    clip_k = min(k * 2, 50) if llm_service.is_enabled else k
     raw_results = search_engine.search(
-        hybrid_embedding, k, filters_dict if filters_dict else None,
+        hybrid_embedding, clip_k, filters_dict if filters_dict else None,
         min_similarity=search_engine.MIN_SIMILARITY_HYBRID,
     )
 
@@ -361,11 +419,19 @@ async def search_hybrid(
         normalized = min(1.0, max(0.0, (raw - low) / span * 0.40 + 0.60))
         r["similarity"] = round(normalized, 4)
 
+    # LLM Step 2: re-rank using the original user query
+    if llm_service.is_enabled and raw_results:
+        raw_results = llm_service.rerank_results(query, raw_results)
+
     # Convert to response format
     results = convert_to_search_results(raw_results)
     latency_ms = int((time.time() - start_time) * 1000)
 
-    logger.info(f"Hybrid search (alpha={alpha}) completed: {len(results)} results in {latency_ms}ms")
+    llm_used = llm_service.is_enabled
+    logger.info(
+        f"Hybrid search (alpha={alpha}) completed: {len(results)} results in {latency_ms}ms "
+        f"(LLM={'on' if llm_used else 'off'})"
+    )
 
     # Log search to database
     image_hash = search_logger.hash_image(content)
@@ -389,6 +455,8 @@ async def search_hybrid(
         latency_ms=latency_ms,
         total_results=len(results),
         filters_applied=filters,
+        expanded_query=expanded_query if expanded_query != query else None,
+        llm_enhanced=llm_used,
     )
 
 

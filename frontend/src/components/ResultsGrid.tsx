@@ -9,6 +9,7 @@ interface ResultsGridProps {
   results: SearchResult[]
   isLoading: boolean
   onProductClick: (product: SearchResult) => void
+  llmEnhanced?: boolean
 }
 
 function SkeletonCard() {
@@ -109,6 +110,7 @@ export default function ResultsGrid({
   results,
   isLoading,
   onProductClick,
+  llmEnhanced = false,
 }: ResultsGridProps) {
   if (isLoading) {
     return (
@@ -124,6 +126,71 @@ export default function ResultsGrid({
     return null
   }
 
+  // When LLM is enabled, split into top results (score >= 6) and other matches (3-5)
+  // Products with score < 3 are hidden entirely
+  if (llmEnhanced) {
+    const topResults = results.filter(
+      (r) => r.llm_score == null || r.llm_score >= 6
+    )
+    const otherResults = results.filter(
+      (r) => r.llm_score != null && r.llm_score >= 3 && r.llm_score < 6
+    )
+
+    return (
+      <div className="space-y-10">
+        {/* Top Results */}
+        {topResults.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-primary-100 text-primary-800">
+                ✦ Top Results
+              </span>
+              <span className="text-sm text-gray-500">{topResults.length} highly relevant matches</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {topResults.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onClick={() => onProductClick(product)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Other Possible Matches */}
+        {otherResults.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600">
+                Other Possible Matches
+              </span>
+              <span className="text-sm text-gray-400">{otherResults.length} loosely related items</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 opacity-80">
+              {otherResults.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onClick={() => onProductClick(product)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Nothing passed threshold */}
+        {topResults.length === 0 && otherResults.length === 0 && (
+          <div className="text-center py-8">
+            <p className="text-gray-500">No relevant products found for your search.</p>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Default: no LLM, show all results in a flat grid
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
       {results.map((product) => (

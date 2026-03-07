@@ -303,21 +303,22 @@ class FashionSearchEngine:
                 return False
 
         # Category filter (case-insensitive partial match)
+        # Skip product if category is None (don't penalise uncategorised items)
         if "category" in filters and filters["category"]:
-            product_category = product.get("category", "").lower()
-            if filters["category"].lower() not in product_category:
+            product_category = (product.get("category") or "").lower()
+            if product_category and filters["category"].lower() not in product_category:
                 return False
 
         # Brand filter
         if "brand" in filters and filters["brand"]:
-            product_brand = product.get("brand", "").lower()
+            product_brand = (product.get("brand") or "").lower()
             if filters["brand"].lower() not in product_brand:
                 return False
 
         # Color filter
         if "color" in filters and filters["color"]:
-            product_color = product.get("color", "").lower()
-            if filters["color"].lower() not in product_color:
+            product_color = (product.get("color") or "").lower()
+            if product_color and filters["color"].lower() not in product_color:
                 return False
 
         return True

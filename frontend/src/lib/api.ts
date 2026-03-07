@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { SearchResponse, SearchFilters } from '@/types'
+import { SearchResponse, SearchFilters, ChatMessage, ChatResponse } from '@/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const API_PREFIX = '/api/v1'
@@ -91,5 +91,36 @@ export async function getSimilarProducts(productId: string, k: number = 20) {
 
 export async function getHealthStatus() {
   const response = await api.get('/health/ready')
+  return response.data
+}
+
+export async function sendChatMessage(
+  messages: ChatMessage[],
+  options: {
+    conversationId?: string
+    image?: File
+    userPreferences?: Record<string, unknown>
+    clarificationCount?: number
+  } = {}
+): Promise<ChatResponse> {
+  const formData = new FormData()
+  formData.append('messages', JSON.stringify(messages))
+
+  if (options.conversationId) {
+    formData.append('conversation_id', options.conversationId)
+  }
+  if (options.userPreferences && Object.keys(options.userPreferences).length > 0) {
+    formData.append('user_preferences', JSON.stringify(options.userPreferences))
+  }
+  if (options.clarificationCount !== undefined) {
+    formData.append('clarification_count', String(options.clarificationCount))
+  }
+  if (options.image) {
+    formData.append('image', options.image)
+  }
+
+  const response = await api.post<ChatResponse>('/chat/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
   return response.data
 }

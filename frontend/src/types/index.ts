@@ -19,6 +19,7 @@ export interface Product {
 
 export interface SearchResult extends Product {
   similarity: number
+  llm_score?: number | null
 }
 
 export interface SearchResponse {
@@ -28,6 +29,8 @@ export interface SearchResponse {
   total_results: number
   filters_applied?: SearchFilters
   model_version?: string
+  expanded_query?: string
+  llm_enhanced?: boolean
 }
 
 export interface SearchFilters {
@@ -40,4 +43,29 @@ export interface SearchFilters {
 
 export interface ApiError {
   detail: string
+}
+
+// Chat Assistant types
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatResponse {
+  message: string
+  products: SearchResult[]
+  web_results: WebSearchResult[]
+  conversation_id: string
+  search_performed: boolean
+  web_search_performed: boolean
+  user_preferences: Record<string, unknown>
+  clarification_count: number
+}
+
+export interface WebSearchResult {
+  title: string
+  url: string
+  snippet?: string
+  price?: string
+  source_site?: string
 }

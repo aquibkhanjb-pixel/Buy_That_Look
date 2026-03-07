@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from .endpoints import search, products, health
+from .endpoints import search, products, health, chat
 
 api_router = APIRouter()
 
@@ -10,3 +10,4 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["Health"])
 api_router.include_router(search.router, prefix="/search", tags=["Search"])
 api_router.include_router(products.router, prefix="/products", tags=["Products"])
+api_router.include_router(chat.router, prefix="/chat", tags=["Chat"])

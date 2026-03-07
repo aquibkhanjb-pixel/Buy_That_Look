@@ -61,9 +61,14 @@ class HybridSearchRequest(BaseModel):
 
 
 class SearchResult(ProductResponse):
-    """Individual search result with similarity score."""
+    """Individual search result with similarity score and optional LLM relevance score."""
 
-    pass
+    llm_score: Optional[float] = Field(
+        None,
+        ge=0,
+        le=10,
+        description="Claude relevance score 0-10. >=6 top result, 3-5 possible match, <3 hidden. None if LLM disabled.",
+    )
 
 
 class SearchResponse(BaseModel):
@@ -75,6 +80,8 @@ class SearchResponse(BaseModel):
     total_results: int = Field(..., ge=0, description="Number of results returned")
     filters_applied: Optional[SearchFilters] = None
     model_version: str = Field(default="clip-vit-b32-v1", description="Model used for search")
+    expanded_query: Optional[str] = Field(None, description="LLM-expanded version of the text query")
+    llm_enhanced: bool = Field(default=False, description="Whether LLM re-ranking was applied")
 
     class Config:
         json_schema_extra = {

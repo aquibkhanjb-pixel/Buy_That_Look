@@ -76,7 +76,25 @@
       "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m uvicorn app.main:app --host 0.0.0.0 --port 8002)",
       "Bash(conda list:*)",
       "Bash(python3:*)",
-      "Bash(cmd //c \"taskkill /PID 99824 /F\")"
+      "Bash(cmd //c \"taskkill /PID 99824 /F\")",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m pip install \"anthropic>=0.40.0\")",
+      "Bash(cmd //c \"taskkill /PID 92808 /F & taskkill /PID 209128 /F & taskkill /PID 89296 /F\")",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -c \":*)",
+      "Bash(cmd //c \"taskkill /PID 209128 /F & taskkill /PID 228260 /F & taskkill /PID 89296 /F & taskkill /PID 92808 /F\")",
+      "Bash(cmd //c \"FOR /F \"\"tokens=5\"\" %a IN \\(''netstat -ano ^| findstr :8000 ^| findstr LISTENING''\\) DO taskkill /PID %a /F\")",
+      "Bash(kill:*)",
+      "Bash(cmd //c \"taskkill /IM python.exe /F\")",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m pip install \"google-generativeai>=0.8.0\")",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -c:*)",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m pip install \"google-genai>=1.0.0\")",
+      "Bash(cmd //c \"netstat -ano | findstr :8001\")",
+      "Bash(echo:*)",
+      "Bash(conda activate:*)",
+      "Bash(pip show:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m pip install langgraph langchain langchain-google-genai)",
+      "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -c \"import langgraph, langchain, langchain_google_genai; print\\(''langgraph:'', langgraph.__version__\\); print\\(''langchain:'', langchain.__version__\\); print\\(''langchain_google_genai: OK''\\)\")",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

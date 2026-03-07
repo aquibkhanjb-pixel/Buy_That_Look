@@ -6,13 +6,14 @@ import SearchTabs from '@/components/SearchTabs'
 import ImageUpload from '@/components/ImageUpload'
 import TextSearch from '@/components/TextSearch'
 import HybridSearch from '@/components/HybridSearch'
+import ChatAssistant from '@/components/ChatAssistant'
 import ResultsGrid from '@/components/ResultsGrid'
 import Filters from '@/components/Filters'
 import ProductModal from '@/components/ProductModal'
 import { SearchResult, SearchFilters, Product } from '@/types'
 import { searchByImage, searchByText, searchHybrid } from '@/lib/api'
 
-type SearchMode = 'image' | 'text' | 'hybrid'
+type SearchMode = 'image' | 'text' | 'hybrid' | 'chat'
 
 export default function Home() {
   const [searchMode, setSearchMode] = useState<SearchMode>('image')
@@ -23,6 +24,8 @@ export default function Home() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
+  const [llmEnhanced, setLlmEnhanced] = useState(false)
+  const [expandedQuery, setExpandedQuery] = useState<string | null>(null)
 
   const handleImageSearch = async (file: File) => {
     setIsLoading(true)
@@ -32,6 +35,8 @@ export default function Home() {
       setResults(response.results)
       setLatencyMs(response.latency_ms)
       setHasSearched(true)
+      setLlmEnhanced(response.llm_enhanced ?? false)
+      setExpandedQuery(null)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -48,6 +53,8 @@ export default function Home() {
       setResults(response.results)
       setLatencyMs(response.latency_ms)
       setHasSearched(true)
+      setLlmEnhanced(response.llm_enhanced ?? false)
+      setExpandedQuery(response.expanded_query ?? null)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -64,6 +71,8 @@ export default function Home() {
       setResults(response.results)
       setLatencyMs(response.latency_ms)
       setHasSearched(true)
+      setLlmEnhanced(response.llm_enhanced ?? false)
+      setExpandedQuery(response.expanded_query ?? null)
     } catch (err) {
       setError('Failed to search. Please try again.')
       console.error(err)
@@ -85,7 +94,19 @@ export default function Home() {
     setLatencyMs(null)
     setError(null)
     setHasSearched(false)
+    setLlmEnhanced(false)
+    setExpandedQuery(null)
   }
+
+  const handleTabChange = (tab: SearchMode) => {
+    setSearchMode(tab)
+    // Clear results when switching tabs (but not for chat)
+    if (tab !== 'chat') {
+      clearResults()
+    }
+  }
+
+  const isSearchMode = searchMode !== 'chat'
 
   return (
     <main className="min-h-screen">
@@ -94,7 +115,7 @@ export default function Home() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Search Section */}
         <div className="mb-8">
-          <SearchTabs activeTab={searchMode} onTabChange={setSearchMode} />
+          <SearchTabs activeTab={searchMode} onTabChange={handleTabChange} />
 
           <div className="mt-6 bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             {searchMode === 'image' && (
@@ -106,11 +127,16 @@ export default function Home() {
             {searchMode === 'hybrid' && (
               <HybridSearch onSearch={handleHybridSearch} isLoading={isLoading} />
             )}
+            {searchMode === 'chat' && (
+              <ChatAssistant onProductClick={handleProductClick} />
+            )}
           </div>
         </div>
 
-        {/* Filters */}
-        <Filters filters={filters} onChange={handleFilterChange} />
+        {/* Filters — only for non-chat modes */}
+        {isSearchMode && (
+          <Filters filters={filters} onChange={handleFilterChange} />
+        )}
 
         {/* Error Message */}
         {error && (
@@ -119,38 +145,56 @@ export default function Home() {
           </div>
         )}
 
-        {/* Results Section */}
-        {(results.length > 0 || isLoading) && (
+        {/* Results Section — only for non-chat modes */}
+        {isSearchMode && (results.length > 0 || isLoading) && (
           <div className="mt-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold text-gray-900">
                 {isLoading ? 'Searching...' : `${results.length} Results Found`}
               </h2>
-              {latencyMs && !isLoading && (
-                <span className="text-sm text-gray-500">
-                  Search completed in {latencyMs}ms
-                </span>
-              )}
-              {results.length > 0 && (
-                <button
-                  onClick={clearResults}
-                  className="text-sm text-gray-500 hover:text-gray-700"
-                >
-                  Clear results
-                </button>
-              )}
+              <div className="flex items-center gap-4">
+                {llmEnhanced && !isLoading && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                    ✦ AI Enhanced
+                  </span>
+                )}
+                {latencyMs && !isLoading && (
+                  <span className="text-sm text-gray-500">
+                    {latencyMs}ms
+                  </span>
+                )}
+                {results.length > 0 && (
+                  <button
+                    onClick={clearResults}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Clear results
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* Show AI query expansion or image description */}
+            {expandedQuery && !isLoading && (
+              <div className="mb-4 px-4 py-2 bg-purple-50 border border-purple-100 rounded-lg text-sm text-purple-700">
+                <span className="font-medium">
+                  {searchMode === 'image' ? 'AI detected: ' : 'AI interpreted your search as: '}
+                </span>
+                <span className="italic">{expandedQuery}</span>
+              </div>
+            )}
 
             <ResultsGrid
               results={results}
               isLoading={isLoading}
               onProductClick={handleProductClick}
+              llmEnhanced={llmEnhanced}
             />
           </div>
         )}
 
         {/* No Results Found — after a completed search */}
-        {!isLoading && hasSearched && results.length === 0 && !error && (
+        {isSearchMode && !isLoading && hasSearched && results.length === 0 && !error && (
           <div className="mt-12 text-center">
             <div className="text-gray-300 mb-4">
               <svg className="mx-auto h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -165,7 +209,7 @@ export default function Home() {
         )}
 
         {/* Initial Empty State — before any search */}
-        {!isLoading && !hasSearched && results.length === 0 && !error && (
+        {isSearchMode && !isLoading && !hasSearched && results.length === 0 && !error && (
           <div className="mt-12 text-center">
             <div className="text-gray-400 mb-4">
               <svg className="mx-auto h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
