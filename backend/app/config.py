@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # LLM / Generative AI
     gemini_api_key: str = ""
 
+    # LangSmith Observability
+    langchain_tracing_v2: bool = False
+    langchain_api_key: str = ""
+    langchain_project: str = "fashion-recommendation"
+    langchain_endpoint: str = "https://api.smith.langchain.com"
+
 
 @lru_cache
 def get_settings() -> Settings:

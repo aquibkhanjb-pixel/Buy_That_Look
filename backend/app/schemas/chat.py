@@ -64,18 +64,25 @@ class FashionFeatures(BaseModel):
         if self.neckline:     parts.append(f"{self.neckline} neck")
         return " ".join(parts) if parts else ""
 
+    # E-commerce platforms that must never be used as brand filters
+    _MARKETPLACES: set = {
+        "flipkart", "amazon", "myntra", "ajio", "meesho",
+        "nykaa", "snapdeal", "tata cliq", "tatacliq", "shopsy",
+    }
+
     def to_filters(self) -> Dict[str, Any]:
         """Build FAISS filter dict from structured features.
 
         Only passes filters that map reliably to DB columns.
         - price: always reliable
-        - brand: reliable when user explicitly mentions a brand
+        - brand: reliable when user explicitly mentions a clothing brand
+          (e-commerce platforms are blocked — they are not clothing brands)
         - category / gender: NOT passed — CLIP semantic search handles these
-          (DB category values like 'Kurtas & Kurtis' often don't match extracted
-          terms like 'kurta', which would cause false zero-result returns)
+          (DB category values often don't match extracted terms like 'kurta')
         """
         f: Dict[str, Any] = {}
-        if self.brand:      f["brand"] = self.brand
+        if self.brand and self.brand.lower() not in self._MARKETPLACES:
+            f["brand"] = self.brand
         if self.max_price is not None: f["max_price"] = self.max_price
         if self.min_price is not None: f["min_price"] = self.min_price
         return f

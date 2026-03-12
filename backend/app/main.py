@@ -5,6 +5,12 @@ Multi-modal fashion search API using CLIP embeddings and FAISS.
 """
 
 import os
+
+# Load .env into os.environ BEFORE any langsmith/langgraph imports
+# so LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY are available immediately.
+from dotenv import load_dotenv
+load_dotenv(override=False)
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -78,6 +84,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("No existing FAISS index found - creating empty index")
         search_engine.create_index(use_hnsw=False)
+
+    # LangSmith tracing — env vars already loaded by load_dotenv() at module level
+    if os.environ.get("LANGCHAIN_TRACING_V2", "").lower() == "true" and os.environ.get("LANGCHAIN_API_KEY"):
+        logger.info(f"LangSmith tracing enabled → project: '{os.environ.get('LANGCHAIN_PROJECT', 'default')}'")
+    else:
+        logger.info("LangSmith tracing disabled (set LANGCHAIN_API_KEY + LANGCHAIN_TRACING_V2=true to enable)")
 
     # Initialise LLM service
     logger.info("Initialising LLM service...")

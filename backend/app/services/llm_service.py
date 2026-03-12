@@ -21,6 +21,14 @@ from typing import Optional
 from loguru import logger
 
 try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(**_kwargs):  # type: ignore[misc]
+        def decorator(fn):
+            return fn
+        return decorator
+
+try:
     from google import genai
     from google.genai import types
     GEMINI_AVAILABLE = True
@@ -64,6 +72,7 @@ class LLMService:
     # Phase 1A — Query Expansion
     # ------------------------------------------------------------------
 
+    @traceable(name="expand_query", run_type="llm", tags=["gemini", "query-expansion"])
     def expand_query(self, query: str) -> str:
         """
         Rewrite a vague user query into a detailed fashion product description.
@@ -81,11 +90,15 @@ class LLMService:
         try:
             prompt = (
                 f'A user is searching for fashion products with this query: "{query}"\n\n'
-                "Rewrite it as a specific, detailed fashion product description "
-                "optimised for visual similarity search.\n"
-                "Include relevant attributes: garment type, colour, style, occasion, "
-                "fit, fabric — only what can be reasonably inferred.\n"
-                "Keep it to 1–2 sentences. Return ONLY the expanded query, no explanation."
+                "Rewrite it as a specific, detailed fashion PRODUCT description "
+                "optimised for visual similarity search (CLIP embeddings).\n"
+                "Include relevant attributes: garment type, colour, style, occasion, fit, fabric.\n"
+                "STRICT RULES:\n"
+                "- Describe ONLY the clothing/accessory item itself\n"
+                "- Do NOT mention people, models, mannequins, or anyone wearing the clothes\n"
+                "- Do NOT use phrases like 'worn by', 'a man wearing', 'model in', 'person dressed'\n"
+                "- Focus on visual product attributes: colour, cut, fabric, embellishment\n"
+                "Keep it to 1-2 sentences. Return ONLY the product description, no explanation."
             )
 
             response = self._client.models.generate_content(
@@ -107,6 +120,7 @@ class LLMService:
     # Phase 1B — Result Re-ranking
     # ------------------------------------------------------------------
 
+    @traceable(name="rerank_results", run_type="llm", tags=["gemini", "reranking"])
     def rerank_results(self, query: str, results: list) -> list:
         """
         Score each CLIP result for relevance against the user's query.
@@ -180,6 +194,7 @@ class LLMService:
     # Phase 2 — Image Description (Vision)
     # ------------------------------------------------------------------
 
+    @traceable(name="describe_image", run_type="llm", tags=["gemini", "vision"])
     def describe_image(self, image_bytes: bytes) -> Optional[str]:
         """
         Generate a detailed fashion description of an uploaded image
