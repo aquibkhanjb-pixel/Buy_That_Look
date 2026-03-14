@@ -75,6 +75,7 @@ async def chat(
 
     # ── Handle optional image ──
     image_description: Optional[str] = None
+    image_bytes: Optional[bytes] = None
     input_type = "text"
 
     if image is not None:
@@ -87,7 +88,7 @@ async def chat(
         if len(image_bytes) > _MAX_IMAGE_SIZE:
             raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
 
-        # Run Gemini Vision to get a fashion description
+        # Gemini Vision for feature extraction (garment type, style, occasion, gender)
         image_description = llm_service.describe_image(image_bytes)
         input_type = "hybrid" if last_msg.strip() else "image"
         logger.info(f"Chat image described: '{(image_description or '')[:60]}...'")
@@ -103,6 +104,7 @@ async def chat(
         conversation_id=cid,
         input_type=input_type,
         image_description=image_description,
+        image_bytes=image_bytes,
         user_preferences=prefs_dict,
         clarification_count=clarification_count,
     )

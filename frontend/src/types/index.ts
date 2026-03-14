@@ -68,4 +68,14 @@ export interface WebSearchResult {
   snippet?: string
   price?: string
   source_site?: string
+  image_url?: string
+  rating?: number
+  rating_count?: number
+  source?: string   // "google_lens" | "serper_shopping" | undefined
+}
+
+export interface TryOnResponse {
+  result_image: string   // base64-encoded JPEG
+  model_used: string
+  latency_ms: number
 }

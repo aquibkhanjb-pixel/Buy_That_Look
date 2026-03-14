@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # LLM / Generative AI
     gemini_api_key: str = ""
 
+    # Serper.dev — Google Shopping API for real product results in web search
+    serper_api_key: str = ""
+
+    # HuggingFace — Virtual Try-On (IDM-VTON Space)
+    hf_token: str = ""
+
     # LangSmith Observability
     langchain_tracing_v2: bool = False
     langchain_api_key: str = ""

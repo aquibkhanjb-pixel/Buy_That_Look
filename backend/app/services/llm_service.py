@@ -36,7 +36,8 @@ except ImportError:
     GEMINI_AVAILABLE = False
     logger.warning("google-genai not installed — LLM features disabled")
 
-_MODEL = "gemini-flash-lite-latest"
+_MODEL = "gemini-2.5-flash"       # thinking disabled via thinking_budget=0 for structured tasks
+_CHAT_MODEL = "gemini-2.5-flash"  # thinking enabled for describe_image (richer vision understanding)
 
 
 class LLMService:
@@ -101,9 +102,13 @@ class LLMService:
                 "Keep it to 1-2 sentences. Return ONLY the product description, no explanation."
             )
 
+            _no_think = types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=0)
+            ) if GEMINI_AVAILABLE else None
             response = self._client.models.generate_content(
                 model=_MODEL,
                 contents=prompt,
+                config=_no_think,
             )
             expanded = response.text.strip()
 
@@ -156,9 +161,13 @@ class LLMService:
                 '[{"id": "product_id_here", "score": 8}, ...]'
             )
 
+            _no_think = types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=0)
+            ) if GEMINI_AVAILABLE else None
             response = self._client.models.generate_content(
                 model=_MODEL,
                 contents=prompt,
+                config=_no_think,
             )
             response_text = response.text.strip()
 
@@ -224,7 +233,7 @@ class LLMService:
             )
 
             response = self._client.models.generate_content(
-                model=_MODEL,
+                model=_CHAT_MODEL,   # 2.5-flash — better multimodal understanding
                 contents=[image, prompt],
             )
             description = response.text.strip()

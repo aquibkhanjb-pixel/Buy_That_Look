@@ -35,10 +35,12 @@ Main graph architecture:
   ask_clarification → update_memory → END
 
 ReAct Outfit Subgraph (runs inside outfit_completion_node):
-  START → oa_extract_attributes → oa_generate_query → oa_search_web
+  START → oa_extract_attributes → oa_style_coordinate → oa_generate_query → oa_search_web
        → oa_evaluate_results → [_outfit_react_router]
             ├── good or max_iter (5) → oa_format_response → END
             └── poor/mismatch        → oa_generate_query  (loop)
+  oa_style_coordinate runs ONCE — acts as a fashion stylist to set ideal_style,
+  color_palette, avoid, and two pre-built queries consumed by oa_generate_query.
 """
 
 import json
@@ -83,6 +85,7 @@ class ChatState(TypedDict):
     input_type: str               # "text" | "image" | "hybrid"
     raw_query: str
     image_description: Optional[str]   # Gemini Vision output (if image provided)
+    image_bytes: Optional[bytes]       # Raw uploaded image — preserved for CLIP image search
 
     # Feature extraction (this turn + accumulated session)
     current_features: dict        # FashionFeatures serialized dict (this turn)
@@ -125,6 +128,9 @@ class ChatState(TypedDict):
     # Cross-turn search context (prevents wrong-category web searches after outfit completion)
     last_search_query: str         # The actual CLIP/search query used in the previous turn
 
+    # Sticky web-search mode: once True, all refinements go to web_search (not local DB)
+    web_search_mode: bool          # Set when user searches a marketplace; sticks for the session
+
     # Outfit completion — waiting for user to specify what TYPE of item they want
     awaiting_outfit_detail: bool   # True when bot asked "footwear/accessories/bottom?" and waiting for answer
 
@@ -148,6 +154,9 @@ class OutfitState(TypedDict):
     iteration: int                 # Current iteration count (starts at 0, max 5)
     current_query: str             # Search query for this iteration
     refinement_hints: List[str]    # What failed in previous iterations (for smarter retries)
+
+    # Fashion stylist guidance (set by oa_style_coordinate, consumed by oa_generate_query + oa_evaluate_results)
+    stylist_guidance: dict         # ideal_style, color_palette, avoid, search_query, search_query_alt
 
     # Per-iteration results
     web_results: List[dict]        # Results from this iteration's web search
@@ -188,16 +197,28 @@ def _clean_json(text: str) -> str:
     return text.strip()
 
 
+# ── Model tier constants ──────────────────────────────────────────────────────
+# Fast   — structured tasks: intent, extraction, rerank, slot-fill, verification
+#          gemini-2.0-flash: no thinking overhead → ~0.5-1 s per call
+# Chat   — conversational quality: generate_response, web_search reply
+#          gemini-2.5-flash: richer language, used only for final reply generation
+# Pro    — quality-critical: fashion stylist (oa_style_coordinate)
+_FAST_MODEL = "gemini-2.5-flash"   # thinking disabled via thinking_budget=0 → fast structured calls
+_CHAT_MODEL = "gemini-2.5-flash"   # thinking enabled → richer conversational replies
+_PRO_MODEL  = "gemini-2.5-pro"
+
 # Circuit breaker: skip Gemini calls for 60 s after a 429 error
 _rate_limited_until: float = 0.0
 
 
 @traceable(name="gemini_call", run_type="llm", tags=["gemini", "chat"])
-def _gemini_call(prompt: str) -> Optional[str]:
+def _gemini_call(prompt: str, model: str = _FAST_MODEL, disable_thinking: bool = True) -> Optional[str]:
     """Make a Gemini API call. Returns text or None on failure.
 
-    Implements a 60-second circuit breaker when the API returns 429 so that
-    subsequent nodes in the same request don't waste time on doomed calls.
+    disable_thinking=True (default): passes thinking_budget=0 to gemini-2.5-flash,
+    disabling chain-of-thought and reducing latency from ~8 s to ~1-2 s.
+    Pass disable_thinking=False for the final conversational reply (generate_response).
+    Implements a circuit breaker for 429/503 errors.
     """
     global _rate_limited_until
     if not llm_service.is_enabled:
@@ -206,10 +227,16 @@ def _gemini_call(prompt: str) -> Optional[str]:
         logger.debug("Gemini rate-limit circuit breaker active — skipping call")
         return None
     try:
-        response = llm_service._client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=prompt,
-        )
+        kwargs: dict = {"model": model, "contents": prompt}
+        if disable_thinking:
+            try:
+                from google.genai import types as _gt
+                kwargs["config"] = _gt.GenerateContentConfig(
+                    thinking_config=_gt.ThinkingConfig(thinking_budget=0)
+                )
+            except Exception:
+                pass  # SDK version doesn't support thinking_config — fall through without it
+        response = llm_service._client.models.generate_content(**kwargs)
         return response.text.strip()
     except Exception as exc:
         exc_str = str(exc)
@@ -226,6 +253,43 @@ def _gemini_call(prompt: str) -> Optional[str]:
 
 # ReAct outfit subgraph singleton (compiled in ChatService.initialize)
 _outfit_agent: Any = None
+
+# Serper.dev API key (set in ChatService.initialize from config)
+_serper_api_key: str = ""
+
+
+def _gemini_vision_call(contents: list) -> Optional[str]:
+    """Make a multimodal Gemini Vision call (list of text strings + PIL Images).
+    Shares the same circuit-breaker state as _gemini_call.
+    """
+    global _rate_limited_until
+    if not llm_service.is_enabled:
+        return None
+    if time.time() < _rate_limited_until:
+        logger.debug("Gemini circuit breaker active — skipping vision call")
+        return None
+    try:
+        _kwargs: dict = {"model": _FAST_MODEL, "contents": contents}
+        try:
+            from google.genai import types as _gt
+            _kwargs["config"] = _gt.GenerateContentConfig(
+                thinking_config=_gt.ThinkingConfig(thinking_budget=0)
+            )
+        except Exception:
+            pass
+        response = llm_service._client.models.generate_content(**_kwargs)
+        return response.text.strip()
+    except Exception as exc:
+        exc_str = str(exc)
+        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+            _rate_limited_until = time.time() + 60
+            logger.warning("Gemini quota exceeded — circuit breaker active for 60 s")
+        elif "503" in exc_str or "UNAVAILABLE" in exc_str:
+            _rate_limited_until = time.time() + 30
+            logger.warning("Gemini service unavailable — circuit breaker active for 30 s")
+        else:
+            logger.warning(f"Gemini vision call failed: {exc}")
+        return None
 
 
 # Known e-commerce marketplaces (for platform-aware routing)
@@ -444,8 +508,78 @@ _OUTFIT_COMPLEMENTS: Dict[str, List[str]] = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ReAct Outfit Subgraph — 5 nodes + router + builder
+# ReAct Outfit Subgraph — 6 nodes + router + builder
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Fashion coordination lookup tables (Option C — used as Gemini fallback) ──
+
+# Which accent colours complement a garment's primary colour
+_COLOUR_COMPLEMENTS: Dict[str, List[str]] = {
+    "navy":    ["gold", "silver", "white", "beige", "champagne"],
+    "blue":    ["gold", "silver", "white", "beige", "tan"],
+    "ivory":   ["gold", "rose gold", "pearl", "nude", "champagne"],
+    "white":   ["gold", "silver", "navy", "black", "pastel"],
+    "black":   ["silver", "gold", "white", "red", "nude"],
+    "maroon":  ["gold", "cream", "ivory", "champagne", "nude"],
+    "red":     ["gold", "black", "white", "silver"],
+    "green":   ["gold", "copper", "white", "nude", "cream"],
+    "pink":    ["gold", "silver", "white", "nude", "rose gold"],
+    "yellow":  ["white", "brown", "gold", "tan"],
+    "orange":  ["white", "gold", "brown", "cream"],
+    "purple":  ["gold", "silver", "white", "nude"],
+    "beige":   ["brown", "gold", "white", "navy", "tan"],
+    "cream":   ["gold", "brown", "navy", "maroon", "tan"],
+    "brown":   ["cream", "beige", "gold", "white", "tan"],
+    "grey":    ["silver", "white", "black", "navy", "blush"],
+}
+
+# What style of complement suits each garment style
+_STYLE_ITEM_MAP: Dict[str, Dict[str, str]] = {
+    "ethnic": {
+        "footwear":    "kolhapuri sandals OR juttis OR ethnic heels",
+        "accessories": "gold OR kundan OR stone-studded ethnic jewellery",
+        "watch":       "ethnic gold watch OR stone-studded analog watch",
+        "bag":         "potli bag OR embroidered clutch",
+        "bottom":      "ethnic palazzo OR dhoti pants OR sharara",
+        "jewellery":   "kundan OR meenakari OR temple gold jewellery",
+    },
+    "casual": {
+        "footwear":    "sneakers OR casual loafers OR flat sandals",
+        "accessories": "minimal everyday accessories",
+        "watch":       "sport watch OR smartwatch OR casual analog watch",
+        "bag":         "backpack OR canvas tote OR crossbody bag",
+        "bottom":      "jeans OR casual trousers OR chinos",
+    },
+    "formal": {
+        "footwear":    "oxford shoes OR pointed heels OR brogues OR derby shoes",
+        "accessories": "minimal silver OR gold accessories",
+        "watch":       "minimalist leather-strap analog watch",
+        "bag":         "structured tote OR leather handbag",
+        "bottom":      "formal trousers OR pencil skirt",
+    },
+    "western": {
+        "footwear":    "ankle boots OR block heels OR ankle-strap heels",
+        "accessories": "statement OR boho layered accessories",
+        "watch":       "fashion watch OR bracelet watch",
+        "bag":         "sling bag OR hobo bag OR mini clutch",
+        "bottom":      "jeans OR mini skirt OR culottes",
+    },
+    "party": {
+        "footwear":    "stilettos OR strappy heels OR embellished sandals",
+        "accessories": "statement OR embellished chunky jewellery",
+        "watch":       "embellished bracelet watch OR chain watch",
+        "bag":         "evening clutch OR minaudière OR rhinestone bag",
+        "bottom":      "mini skirt OR sequin trousers OR party shorts",
+    },
+    "boho": {
+        "footwear":    "gladiator sandals OR suede ankle boots OR espadrilles",
+        "accessories": "layered beaded OR tassel jewellery",
+        "watch":       "leather-strap bohemian watch OR wooden watch",
+        "bag":         "fringed bag OR wicker bag OR macrame bag",
+        "bottom":      "flowy maxi skirt OR wide-leg pants",
+    },
+}
+
 
 def oa_extract_attributes(state: OutfitState) -> OutfitState:
     """
@@ -503,69 +637,163 @@ def oa_extract_attributes(state: OutfitState) -> OutfitState:
     return {**state, "reference_attributes": attributes}
 
 
+def oa_style_coordinate(state: OutfitState) -> OutfitState:
+    """
+    ReAct — Fashion Stylist step: runs ONCE before the first query.
+    Asks Gemini "what would actually look good WITH this outfit?" —
+    producing ideal_style, color_palette, and avoid guidance.
+    This guidance is CONTEXT for oa_generate_query, NOT used verbatim as search queries
+    (editorial fashion language doesn't match Google Shopping product titles).
+    Falls back to _COLOUR_COMPLEMENTS + _STYLE_ITEM_MAP lookup tables when Gemini is down.
+    """
+    ref_product     = state.get("reference_product", {})
+    ref_attrs       = state.get("reference_attributes", {})
+    complement_item = state.get("complement_item", "") or state.get("complement_type", "accessories")
+    user_gender     = state.get("user_gender", "")
+    user_budget     = state.get("user_budget")
+
+    ref_title  = ref_product.get("title", "an outfit")
+    color      = ref_attrs.get("color", "")
+    style      = ref_attrs.get("style", "")
+    occasion   = ref_attrs.get("occasion", "")
+    pattern    = ref_attrs.get("pattern", "")
+    fabric     = ref_attrs.get("fabric", "")
+
+    guidance: dict = {}
+
+    if llm_service.is_enabled:
+        gender_ctx = f"Shopper gender: {user_gender}" if user_gender else ""
+
+        prompt = (
+            "You are an expert Indian fashion stylist helping a shopper complete their outfit.\n\n"
+            f"Reference outfit: {ref_title}\n"
+            f"  - Primary colour: {color or 'unknown'}\n"
+            f"  - Style: {style or 'unknown'}\n"
+            f"  - Pattern: {pattern or 'none'}\n"
+            f"  - Fabric: {fabric or 'unknown'}\n"
+            f"  - Occasion: {occasion or 'everyday'}\n"
+            f"{gender_ctx}\n"
+            f"The shopper wants: {complement_item}\n\n"
+            "Using colour theory and Indian fashion coordination rules, tell me:\n"
+            f"1. What SPECIFIC STYLE of {complement_item} complements this outfit best?\n"
+            f"   (e.g. 'minimalist gold analog watch', 'kolhapuri sandals', 'kundan earrings')\n"
+            f"2. What COLOUR TONES work? (3-4 specific tones, e.g. 'gold, rose gold, champagne')\n"
+            f"3. What should be AVOIDED? (styles/colours that clash)\n\n"
+            "Return ONLY a JSON object (no markdown):\n"
+            "{\n"
+            '  "ideal_style": "specific style description",\n'
+            '  "color_palette": "gold, rose gold, champagne",\n'
+            '  "avoid": "dark brown leather, chunky sport styles"\n'
+            "}"
+        )
+        raw = _gemini_call(prompt, model=_CHAT_MODEL, disable_thinking=False)   # Flash with thinking — good quality, faster than Pro
+        if raw:
+            try:
+                guidance = json.loads(_clean_json(raw))
+                logger.info(
+                    f"Stylist guidance for '{complement_item}': "
+                    f"ideal='{guidance.get('ideal_style','')}' "
+                    f"colors='{guidance.get('color_palette','')}'"
+                )
+            except Exception as exc:
+                logger.warning(f"Stylist guidance parse error: {exc}")
+
+    # ── Rule-based fallback when Gemini is down / parse failed ─────────────
+    if not guidance:
+        comp_colours = _COLOUR_COMPLEMENTS.get(color.lower(), ["neutral", "gold", "white"]) if color else ["neutral"]
+        style_key    = (style or "").lower()
+        item_key     = complement_item.lower()
+        style_desc   = (
+            _STYLE_ITEM_MAP.get(style_key, {}).get(item_key)
+            or _STYLE_ITEM_MAP.get(style_key, {}).get("accessories")
+            or f"{style_key} {complement_item}"
+        )
+        palette      = ", ".join(comp_colours[:3])
+        gender_pfx   = f"{user_gender} " if user_gender else ""
+        budget_sfx   = f" under {int(user_budget)}" if user_budget else ""
+
+        guidance = {
+            "ideal_style":   style_desc or f"{style_key} {complement_item}",
+            "color_palette": palette,
+            "avoid":         "",
+        }
+        logger.info(f"Stylist guidance: rule-based fallback for '{complement_item}' | palette={palette}")
+
+    return {**state, "stylist_guidance": guidance}
+
+
 def oa_generate_query(state: OutfitState) -> OutfitState:
     """
-    ReAct — Reason step: generate a targeted web search query.
-    Incorporates refinement_hints from failed previous iterations to avoid repeating mistakes.
+    ReAct — Reason step: generate a SHORT, product-title-matching Google Shopping query.
+
+    All iterations ask Gemini for a concise 3-5 word product search query using
+    stylist guidance (ideal_style, color_palette) as context.
+    Stylist editorial language ("minimalist gold analog watch ethnic wedding") is
+    intentionally NOT used verbatim — Google Shopping matches on product titles,
+    so shorter commercial terms like "women gold ethnic watch" perform much better.
     """
-    ref_attrs        = state.get("reference_attributes", {})
-    complement_type  = state.get("complement_type", "accessories")
-    # Use the specific item the user asked for (e.g. "watch") over the broad category ("accessories")
-    complement_item  = state.get("complement_item", "") or complement_type
-    ref_product      = state.get("reference_product", {})
+    complement_item  = state.get("complement_item", "") or state.get("complement_type", "accessories")
     refinement_hints = state.get("refinement_hints", [])
     iteration        = state.get("iteration", 0)
     user_gender      = state.get("user_gender", "")
     user_budget      = state.get("user_budget")
+    guidance         = state.get("stylist_guidance", {})
+    ref_attrs        = state.get("reference_attributes", {})
 
-    ref_title  = ref_product.get("title", "")
-    garment    = ref_attrs.get("garment_type", "")
-    color      = ref_attrs.get("color", "")
-    style      = ref_attrs.get("style", "ethnic")
-    occasion   = ref_attrs.get("occasion", "")
+    ideal_style   = guidance.get("ideal_style", "")
+    color_palette = guidance.get("color_palette", "")
+    avoid         = guidance.get("avoid", "")
+    style         = ref_attrs.get("style", "")
+    occasion      = ref_attrs.get("occasion", "")
+
+    query = ""
 
     if llm_service.is_enabled:
-        hint_text   = ""
+        hint_text = ""
         if refinement_hints:
             hint_text = (
-                "\nPrevious attempts that did NOT work well:\n"
-                + "\n".join(f"- {h}" for h in refinement_hints[-3:])
-                + "\nGenerate a DIFFERENT query that avoids the issues listed above."
+                "\nPrevious queries that returned poor/mismatched results — do NOT repeat them:\n"
+                + "\n".join(f"  - {h}" for h in refinement_hints[-3:])
+                + "\nGenerate a clearly DIFFERENT query.\n"
             )
-        budget_text = f"\nBudget: under ₹{int(user_budget)}" if user_budget else ""
-        gender_text = f"\nFor: {user_gender}" if user_gender else ""
 
+        # Vary strategy across iterations for better coverage
+        angle_map = {
+            0: f"Focus on item type + colour tone. Example format: '{user_gender} {color_palette.split(',')[0].strip() if color_palette else ''} {complement_item}'",
+            1: f"Focus on style/occasion. Example format: '{user_gender} {style or ''} {complement_item} {occasion or ''}'",
+            2: f"Focus on ideal style descriptor. Example format: '{user_gender} {ideal_style}'",
+            3: f"Try a brand-agnostic product term that appears in Indian e-commerce titles.",
+            4: f"Try the broadest possible query that still targets the correct item type.",
+        }
+        angle = angle_map.get(iteration, angle_map[4])
+
+        budget_text = f" under ₹{int(user_budget)}" if user_budget else ""
         prompt = (
-            f"Generate a specific Indian fashion/shopping search query for '{complement_item}' "
-            f"to pair with: '{ref_title}'.\n\n"
-            f"IMPORTANT: The query MUST be specifically about '{complement_item}' — "
-            f"do NOT generate queries about the garment itself or other items.\n\n"
-            f"Reference item attributes:\n"
-            f"- Garment type: {garment or 'unknown'}\n"
-            f"- Primary color: {color or 'unknown'}\n"
-            f"- Style: {style or 'unknown'}\n"
-            f"- Occasion: {occasion or 'unknown'}\n"
-            f"{gender_text}{budget_text}\n"
+            f"Generate a Google Shopping search query to find: {complement_item}\n\n"
+            f"Fashion context (use as inspiration, NOT verbatim):\n"
+            f"  Ideal style: {ideal_style}\n"
+            f"  Good colour tones: {color_palette}\n"
+            f"  Avoid: {avoid or 'nothing specific'}\n"
             f"{hint_text}\n"
-            f"Iteration {iteration + 1} of 5.\n"
-            "Return ONLY the search query (one line, no explanation, no quotes)."
+            f"Query angle for this iteration: {angle}\n\n"
+            f"Rules:\n"
+            f"  - Query MUST be about '{complement_item}' only — never about the garment\n"
+            f"  - Keep it SHORT: 3-5 words maximum\n"
+            f"  - Use simple commercial terms that appear in product TITLES on Myntra/Amazon\n"
+            f"  - Do NOT use editorial language like 'minimalist' or long descriptive phrases\n"
+            f"  - Start with gender if known: '{user_gender}'\n"
+            f"  - Budget hint (add only if space allows): '{budget_text.strip()}'\n\n"
+            "Return ONLY the query — one line, no quotes, no explanation."
         )
-        query = _gemini_call(prompt)
-        if query:
-            query = query.strip().strip('"').strip("'")
-        else:
-            parts = [user_gender, color, style, complement_item]
-            if garment:
-                parts.append(f"for {garment}")
-            query = " ".join(p for p in parts if p).strip()
-    else:
-        parts = [user_gender, color, style, complement_item]
-        if garment:
-            parts.append(f"for {garment}")
-        query = " ".join(p for p in parts if p).strip()
+        raw = _gemini_call(prompt)
+        if raw:
+            query = raw.strip().strip('"').strip("'")
 
+    # ── Fallback: rule-based short query ─────────────────────────────────────
     if not query:
-        query = f"{complement_item} for {ref_title[:30]}"
+        first_colour = color_palette.split(",")[0].strip() if color_palette else ""
+        parts = [p for p in [user_gender, first_colour, style, complement_item] if p]
+        query = " ".join(parts[:4])  # cap at 4 tokens
 
     logger.info(f"ReAct outfit iter {iteration + 1}/5: query='{query[:80]}'")
     return {**state, "current_query": query}
@@ -574,82 +802,48 @@ def oa_generate_query(state: OutfitState) -> OutfitState:
 def oa_search_web(state: OutfitState) -> OutfitState:
     """
     ReAct — Act step: web search for the current_query.
-    Tries Gemini Grounding first; falls back to direct e-commerce search links.
+    Tries Serper.dev Google Shopping first (real products with images/prices),
+    then falls back to direct e-commerce search links.
+    Grounding is intentionally NOT used — it reliably returns non-fashion sites.
     """
-    query            = state.get("current_query", "")
-    complement_type  = state.get("complement_type", "accessories")
-    # Use the specific item ("watch") rather than the broad category ("accessories") in prompts
-    complement_item  = state.get("complement_item", "") or complement_type
+    query           = state.get("current_query", "")
+    complement_item = state.get("complement_item", "") or state.get("complement_type", "accessories")
 
     if not query:
         return {**state, "web_results": []}
 
-    web_results: List[dict] = []
-    grounding_worked = False
+    # ── Serper.dev — direct search (no vision verification here) ─────────────
+    # oa_evaluate_results handles quality/style checking — double verification
+    # caused thumbnails to fail → empty results → apology loop.
+    serper_results = _serper_search(query, num=6)
+    if serper_results:
+        logger.info(f"ReAct outfit Serper: {len(serper_results)} products for '{complement_item}' iter {state.get('iteration', 0) + 1}")
+        return {**state, "web_results": serper_results}
 
-    # Try Gemini Grounding
-    if llm_service.is_enabled:
-        try:
-            from google.genai import types as genai_types
-
-            grounding_prompt = (
-                f"Find '{complement_item}' available to buy in India that match: {query}\n"
-                "Requirements:\n"
-                "- List 4-5 individual products with name, price, and direct buy link\n"
-                f"- Products must be '{complement_item}' ONLY — NOT kurtas, shirts, or other clothing\n"
-                "- Only return results from reliable Indian e-commerce or brand sites"
-            )
-            response = llm_service._client.models.generate_content(
-                model="gemini-flash-lite-latest",
-                contents=grounding_prompt,
-                config=genai_types.GenerateContentConfig(
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
-                ),
-            )
-
-            grounding_chunks = []
-            try:
-                meta = response.candidates[0].grounding_metadata
-                if meta and meta.grounding_chunks:
-                    for chunk in meta.grounding_chunks:
-                        if chunk.web:
-                            grounding_chunks.append({
-                                "title":       chunk.web.title or "Product",
-                                "url":         chunk.web.uri,
-                                "snippet":     None,
-                                "source_site": chunk.web.uri.split("/")[2] if chunk.web.uri else None,
-                            })
-            except Exception:
-                pass
-
-            if grounding_chunks:
-                web_results = grounding_chunks[:5]
-                grounding_worked = True
-                logger.info(f"ReAct outfit grounding: {len(web_results)} results for '{complement_item}' iter {state.get('iteration',0)+1}")
-
-        except Exception as exc:
-            logger.warning(f"ReAct outfit grounding failed: {exc}")
-
-    # Direct e-commerce links fallback
-    if not grounding_worked:
-        encoded  = urllib.parse.quote_plus(query)
-        short_q  = query[:50]
-        web_results = [
-            {"title": f"Search on Ajio: {short_q}",     "url": f"https://www.ajio.com/search/?text={encoded}",            "source_site": "ajio.com"},
-            {"title": f"Search on Myntra: {short_q}",   "url": f"https://www.myntra.com/search?rawQuery={encoded}",        "source_site": "myntra.com"},
-            {"title": f"Search on Amazon: {short_q}",   "url": f"https://www.amazon.in/s?k={encoded}",                    "source_site": "amazon.in"},
-            {"title": f"Search on Flipkart: {short_q}", "url": f"https://www.flipkart.com/search?q={encoded}",            "source_site": "flipkart.com"},
-        ]
-        logger.info(f"ReAct outfit: direct links fallback for '{query[:50]}'")
-
+    # ── Fallback: direct e-commerce search links ───────────────────────────────
+    encoded = urllib.parse.quote_plus(query)
+    short_q = query[:50]
+    web_results = [
+        {"title": f"Ajio — {short_q}",     "url": f"https://www.ajio.com/search/?text={encoded}",         "source_site": "ajio.com"},
+        {"title": f"Myntra — {short_q}",   "url": f"https://www.myntra.com/search?rawQuery={encoded}",     "source_site": "myntra.com"},
+        {"title": f"Amazon — {short_q}",   "url": f"https://www.amazon.in/s?k={encoded}",                  "source_site": "amazon.in"},
+        {"title": f"Flipkart — {short_q}", "url": f"https://www.flipkart.com/search?q={encoded}",          "source_site": "flipkart.com"},
+    ]
+    logger.info(f"ReAct outfit: direct links fallback for '{query[:50]}'")
     return {**state, "web_results": web_results}
 
 
 def oa_evaluate_results(state: OutfitState) -> OutfitState:
     """
-    ReAct — Observation step: Gemini evaluates whether results match complement_type.
-    Increments the iteration counter. Saves a refinement_hint when results are poor
-    so the next oa_generate_query call can avoid the same mistake.
+    ReAct — Observation step: style-aware evaluation of search results.
+
+    Checks two layers:
+      1. Category match  — are these the right item type? (old logic)
+      2. Style/colour match — do they fit the IDEAL STYLE and COLOUR PALETTE
+                              from oa_style_coordinate? (new logic)
+
+    This catches "brown sport watch returned for ivory silk wedding kurta" as
+    'poor' even though it is technically a watch (correct category).
     """
     web_results      = state.get("web_results", [])
     query            = state.get("current_query", "")
@@ -657,27 +851,33 @@ def oa_evaluate_results(state: OutfitState) -> OutfitState:
     complement_item  = state.get("complement_item", "") or complement_type
     iteration        = state.get("iteration", 0)
     refinement_hints = list(state.get("refinement_hints", []))
+    guidance         = state.get("stylist_guidance", {})
+    ref_product      = state.get("reference_product", {})
+
+    ideal_style   = guidance.get("ideal_style", complement_item)
+    color_palette = guidance.get("color_palette", "")
+    avoid         = guidance.get("avoid", "")
+    ref_title     = ref_product.get("title", "the outfit")
 
     new_iteration = iteration + 1
 
     if not web_results:
-        refinement_hints.append(f"Query '{query}' returned no results")
+        refinement_hints.append(f"Query '{query}' returned no results — try a different phrasing")
         return {
             **state,
-            "iteration":          new_iteration,
-            "evaluation":         "poor",
-            "evaluation_reason":  "No results returned",
-            "refinement_hints":   refinement_hints,
+            "iteration":         new_iteration,
+            "evaluation":        "poor",
+            "evaluation_reason": "No results returned",
+            "refinement_hints":  refinement_hints,
         }
 
-    # If all results are plain direct links (no snippet/grounding) — accept as good.
-    # We can't evaluate raw search URLs without actually visiting them.
+    # Direct search links (no title/snippet from Serper) — can't evaluate, accept
     all_direct = all(
-        r.get("source_site") and not r.get("snippet")
+        r.get("source_site") and not r.get("snippet") and not r.get("image_url")
         for r in web_results
     )
     if all_direct:
-        logger.info(f"ReAct outfit iter {new_iteration}: direct links only — accepting")
+        logger.info(f"ReAct outfit iter {new_iteration}: direct links only — accepting as good")
         return {
             **state,
             "iteration":         new_iteration,
@@ -686,25 +886,27 @@ def oa_evaluate_results(state: OutfitState) -> OutfitState:
             "refinement_hints":  refinement_hints,
         }
 
-    # Use Gemini to evaluate grounding results
+    # Style-aware Gemini evaluation
     if llm_service.is_enabled:
         results_text = "\n".join(
-            f"- {r.get('title','Unknown')} ({r.get('source_site','')})"
-            for r in web_results[:5]
+            f"- {r.get('title', 'Unknown')} | {r.get('price', '')} | {r.get('source_site', '')}"
+            for r in web_results[:6]
         )
         prompt = (
-            f"Evaluate if these search results are good matches for '{complement_item}'.\n"
-            f"Search query: '{query}'\n"
-            f"Results:\n{results_text}\n\n"
-            "Criteria:\n"
-            f"1. Results should be '{complement_item}' ONLY — if kurtas/shirts/clothing appear instead of '{complement_item}', that is a MISMATCH\n"
-            "2. Results should be relevant to the search query\n"
-            "3. Results should be from reliable shopping sites\n\n"
-            "Respond with JSON (no markdown):\n"
-            '{"evaluation": "good|poor|mismatch", "reason": "brief explanation"}\n'
-            "good     = results closely match query and are the correct item type\n"
-            "poor     = results are somewhat relevant but not ideal\n"
-            "mismatch = results are completely wrong category (e.g. clothing when watch was searched)\n"
+            "You are a fashion stylist evaluating whether search results are suitable "
+            "for an outfit completion recommendation.\n\n"
+            f"Reference outfit: {ref_title}\n"
+            f"Complement wanted: {complement_item}\n"
+            f"Ideal style: {ideal_style}\n"
+            f"Compatible colours: {color_palette}\n"
+            f"Things to AVOID: {avoid or 'none specified'}\n\n"
+            f"Search results returned:\n{results_text}\n\n"
+            "Evaluate ALL results together:\n"
+            f"  mismatch = wrong item type entirely (e.g. kurtas returned when '{complement_item}' was wanted)\n"
+            f"  poor     = correct item type BUT wrong style or colour (e.g. dark sport watch for silk wedding kurta)\n"
+            f"  good     = correct item type AND style/colour aligns with '{ideal_style}' and palette '{color_palette}'\n\n"
+            "Respond with JSON only (no markdown):\n"
+            '{"evaluation": "good|poor|mismatch", "reason": "one sentence explanation"}\n'
             "Return ONLY the JSON."
         )
         raw = _gemini_call(prompt)
@@ -721,9 +923,14 @@ def oa_evaluate_results(state: OutfitState) -> OutfitState:
                 pass
 
         if evaluation != "good":
-            refinement_hints.append(f"Query '{query}' was {evaluation}: {reason}")
+            # Record a specific, actionable hint for oa_generate_query
+            hint = (
+                f"Iter {new_iteration}: query='{query}' → {evaluation}. {reason}. "
+                f"Need: {ideal_style} in {color_palette} tones. Avoid: {avoid}."
+            )
+            refinement_hints.append(hint)
 
-        logger.info(f"ReAct outfit iter {new_iteration}: eval={evaluation} | {reason[:60]}")
+        logger.info(f"ReAct outfit iter {new_iteration}: eval={evaluation} | {reason[:80]}")
         return {
             **state,
             "iteration":         new_iteration,
@@ -742,9 +949,73 @@ def oa_evaluate_results(state: OutfitState) -> OutfitState:
         }
 
 
+def _generate_match_reasons(
+    web_results: List[dict],
+    ref_title: str,
+    ref_color: str,
+    ref_style: str,
+    ref_occasion: str,
+    complement_item: str,
+    guidance: dict,
+) -> List[dict]:
+    """
+    Single Gemini batch call that generates a 1-sentence styling reason for each product,
+    explaining WHY it complements the reference outfit.
+    Injects the reason into the 'snippet' field of each result dict.
+    Returns the enriched list (original list unchanged on failure).
+    """
+    if not llm_service.is_enabled or not web_results:
+        return web_results
+
+    ideal_style   = guidance.get("ideal_style", "")
+    color_palette = guidance.get("color_palette", "")
+
+    numbered = "\n".join(
+        f"{i + 1}. {r.get('title', 'Unknown')} {('— ' + r.get('price', '')) if r.get('price') else ''}"
+        for i, r in enumerate(web_results)
+    )
+
+    prompt = (
+        "You are an Indian fashion stylist. For each product below, write ONE short sentence "
+        "(10–14 words max) explaining WHY it pairs well with the reference outfit.\n\n"
+        f"Reference outfit: {ref_title}\n"
+        f"  Colour: {ref_color or 'unknown'} | Style: {ref_style or 'unknown'} | Occasion: {ref_occasion or 'everyday'}\n"
+        f"Ideal complement: {ideal_style}\n"
+        f"Compatible colour tones: {color_palette}\n\n"
+        f"Products:\n{numbered}\n\n"
+        "Rules:\n"
+        "  - Each reason must be specific to THAT product's title — not generic\n"
+        "  - Mention colour or style coordination when possible\n"
+        "  - Keep each reason under 14 words\n"
+        "  - Do NOT start every sentence with 'This'\n\n"
+        f"Return ONLY a JSON array of {len(web_results)} strings, one per product:\n"
+        '["reason for product 1", "reason for product 2", ...]'
+    )
+
+    raw = _gemini_call(prompt)
+    if not raw:
+        return web_results
+
+    try:
+        reasons = json.loads(_clean_json(raw))
+        if not isinstance(reasons, list):
+            return web_results
+        enriched = []
+        for i, result in enumerate(web_results):
+            r = dict(result)
+            if i < len(reasons) and reasons[i]:
+                r["snippet"] = str(reasons[i]).strip()
+            enriched.append(r)
+        logger.info(f"Match reasons generated for {len(enriched)} outfit products")
+        return enriched
+    except Exception as exc:
+        logger.warning(f"Match reason parse error: {exc}")
+        return web_results
+
+
 def oa_format_response(state: OutfitState) -> OutfitState:
     """
-    Generate the final outfit completion response text and select best web results.
+    Generate the final outfit completion response text and per-product match reasons.
     Apologises gracefully if max iterations were reached without a perfect match.
     """
     web_results     = state.get("web_results", [])
@@ -752,13 +1023,21 @@ def oa_format_response(state: OutfitState) -> OutfitState:
     complement_item = state.get("complement_item", "") or complement_type
     ref_product     = state.get("reference_product", {})
     ref_attrs       = state.get("reference_attributes", {})
+    guidance        = state.get("stylist_guidance", {})
     iteration       = state.get("iteration", 0)
     evaluation      = state.get("evaluation", "good")
 
-    ref_title  = ref_product.get("title", "your outfit")
-    ref_color  = ref_attrs.get("color", "")
-    ref_style  = ref_attrs.get("style", "")
+    ref_title   = ref_product.get("title", "your outfit")
+    ref_color   = ref_attrs.get("color", "")
+    ref_style   = ref_attrs.get("style", "")
+    ref_occasion = ref_attrs.get("occasion", "")
 
+    # ── Per-product match reasons (injected into snippet field) ──────────────
+    web_results = _generate_match_reasons(
+        web_results, ref_title, ref_color, ref_style, ref_occasion, complement_item, guidance
+    )
+
+    # ── Chat response text ───────────────────────────────────────────────────
     if llm_service.is_enabled:
         style_ctx = f"{ref_color} {ref_style}".strip() or "your style"
 
@@ -773,9 +1052,9 @@ def oa_format_response(state: OutfitState) -> OutfitState:
         else:
             prompt = (
                 f"You found online results for '{complement_item}' to pair with '{ref_title}' ({style_ctx}).\n"
-                f"Found {len(web_results)} links. Write a short enthusiastic response (2-3 sentences).\n"
+                f"Found {len(web_results)} options. Write a short enthusiastic response (2 sentences).\n"
                 f"Mention the specific item ('{complement_item}') and the style connection.\n"
-                "Do NOT describe or predict the link contents — just say you found links to explore.\n"
+                "Tell the user each card shows WHY the product complements their outfit.\n"
                 "Return ONLY the reply text."
             )
 
@@ -783,15 +1062,15 @@ def oa_format_response(state: OutfitState) -> OutfitState:
         if not response_text:
             response_text = (
                 f"I found some {complement_item} options that should pair beautifully with your "
-                f"{ref_style or ''} outfit! Here are some links to explore online."
+                f"{ref_style or ''} outfit! Each card explains why it works with your look."
             )
     else:
         response_text = (
             f"Here are some {complement_item} options to complement your look! "
-            "Check these links to find what suits you best."
+            "Each card shows why it pairs well with your outfit."
         )
 
-    logger.info(f"ReAct outfit complete | iterations={iteration} | eval={evaluation} | {len(web_results)} links")
+    logger.info(f"ReAct outfit complete | iterations={iteration} | eval={evaluation} | {len(web_results)} products")
     return {**state, "outfit_response": response_text, "outfit_web_results": web_results}
 
 
@@ -807,6 +1086,11 @@ def _outfit_react_router(state: OutfitState) -> str:
     if evaluation == "good":
         logger.info(f"ReAct outfit: accepted at iteration {iteration}")
         return "oa_format_response"
+    elif evaluation == "poor" and iteration >= 2:
+        # Correct item type found — style not perfect but good enough after 2 refinements.
+        # Better to show imperfect results than apologise repeatedly.
+        logger.info(f"ReAct outfit: accepting 'poor' after {iteration} iters — showing best available")
+        return "oa_format_response"
     elif iteration >= 5:
         logger.info(f"ReAct outfit: max 5 iterations reached — formatting best-effort response")
         return "oa_format_response"
@@ -816,20 +1100,22 @@ def _outfit_react_router(state: OutfitState) -> str:
 
 
 def _build_outfit_subgraph():
-    """Compile the ReAct outfit completion subgraph."""
+    """Compile the ReAct outfit completion subgraph (6 nodes)."""
     graph = StateGraph(OutfitState)
 
     graph.add_node("oa_extract_attributes", oa_extract_attributes)
+    graph.add_node("oa_style_coordinate",   oa_style_coordinate)   # NEW — fashion stylist step
     graph.add_node("oa_generate_query",     oa_generate_query)
     graph.add_node("oa_search_web",         oa_search_web)
     graph.add_node("oa_evaluate_results",   oa_evaluate_results)
     graph.add_node("oa_format_response",    oa_format_response)
 
-    # Linear first pass
-    graph.add_edge(START,                   "oa_extract_attributes")
-    graph.add_edge("oa_extract_attributes", "oa_generate_query")
-    graph.add_edge("oa_generate_query",     "oa_search_web")
-    graph.add_edge("oa_search_web",         "oa_evaluate_results")
+    # Linear first pass — stylist runs ONCE between attribute extraction and query generation
+    graph.add_edge(START,                    "oa_extract_attributes")
+    graph.add_edge("oa_extract_attributes",  "oa_style_coordinate")
+    graph.add_edge("oa_style_coordinate",    "oa_generate_query")
+    graph.add_edge("oa_generate_query",      "oa_search_web")
+    graph.add_edge("oa_search_web",          "oa_evaluate_results")
 
     # ReAct loop
     graph.add_conditional_edges(
@@ -953,6 +1239,15 @@ def extract_fashion_features(state: ChatState) -> ChatState:
         if raw:
             try:
                 parsed = json.loads(_clean_json(raw))
+                # Gemini sometimes returns lists for fields declared as str.
+                # Coerce: join multi-value lists with "/" for string fields;
+                # leave "color" alone (FashionFeatures.color is Optional[List[str]]).
+                _str_fields = {"garment_type", "pattern", "style", "fit", "fabric",
+                               "occasion", "gender", "brand", "sleeve_type", "neckline"}
+                for field in _str_fields:
+                    val = parsed.get(field)
+                    if isinstance(val, list):
+                        parsed[field] = "/".join(str(v) for v in val if v) or None
                 current_features = FashionFeatures(**{
                     k: v for k, v in parsed.items()
                     if k in FashionFeatures.model_fields
@@ -995,10 +1290,19 @@ def extract_fashion_features(state: ChatState) -> ChatState:
     else:
         merged = accumulated_features.merge(current_features)
 
-    # Build CLIP query — prefer merged features, fall back to raw message
+    # Build CLIP query — prefer merged features
+    # For image/hybrid inputs: fall back to image_description (not the vague user message)
+    # For text inputs: fall back to expand_query on the raw user message
     clip_query = merged.to_clip_query()
     if not clip_query:
-        clip_query = llm_service.expand_query(last_msg) if llm_service.is_enabled else last_msg
+        image_desc = state.get("image_description")
+        input_type = state.get("input_type", "text")
+        if image_desc and input_type in ("image", "hybrid"):
+            clip_query = image_desc   # The image description IS the product specification
+        elif llm_service.is_enabled:
+            clip_query = llm_service.expand_query(last_msg)
+        else:
+            clip_query = last_msg
 
     search_params = SearchParams(
         query=clip_query,
@@ -1027,6 +1331,16 @@ def extract_fashion_features(state: ChatState) -> ChatState:
 # Node 3 — Search Local DB
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Garment types with <20 products in the local DB — CLIP will return wrong-category results.
+# Route these directly to web search by returning empty local_results.
+_WEB_ONLY_GARMENTS: set[str] = {
+    "kurta", "kurti", "saree", "sari", "lehenga", "anarkali", "salwar",
+    "dupatta", "sherwani", "sharara", "ghagra", "churidar", "kaftan",
+    "dress", "skirt", "gown", "maxi", "bodysuit", "jumpsuit", "romper",
+    "palazzos", "palazzo",
+}
+
+
 def search_local_db(state: ChatState) -> ChatState:
     """
     Feature 5 — Parallel Search: runs two FAISS queries simultaneously using threads.
@@ -1044,33 +1358,96 @@ def search_local_db(state: ChatState) -> ChatState:
         logger.warning("Search engine not ready or empty query")
         return {**state, "local_results": []}
 
-    primary_results: List[dict] = []
+    # ── Garment coverage check ────────────────────────────────────────────────
+    # Skip local FAISS search for garment types with near-zero local inventory.
+    # Applies to both text AND image inputs — image_description sets garment_type
+    # via extract_fashion_features, so the same check catches uploaded kurta/dress/etc.
+    # quality_router routes empty local_results → web_search automatically.
+    input_type = state.get("input_type", "text")
+    garment_type = (
+        state.get("user_preferences", {}).get("garment_type") or ""
+    ).lower().strip()
+    if garment_type in _WEB_ONLY_GARMENTS:
+        logger.info(f"Garment '{garment_type}' not in local DB — skipping FAISS, routing to web search")
+        return {**state, "local_results": []}
+
+    image_bytes = state.get("image_bytes")
+
+    primary_results:   List[dict] = []
     secondary_results: List[dict] = []
+    bing_results:      List[dict] = []
+    lens_results:      List[dict] = []
 
     def _run_primary():
         nonlocal primary_results
-        primary_results = search_engine.search_by_text(
-            query=params.query,
-            k=params.k,
-            filters=params.filters if params.filters else None,
-        )
+        if input_type == "image" and image_bytes:
+            # True image-to-image CLIP search — bypasses text description entirely
+            primary_results = search_engine.search_by_image(
+                image_bytes=image_bytes,
+                k=params.k,
+                filters=params.filters if params.filters else None,
+            )
+        elif input_type == "hybrid" and image_bytes:
+            # Blend image vector (60%) + text vector (40%) for image+text queries
+            primary_results = search_engine.search_hybrid(
+                image_bytes=image_bytes,
+                query=params.query,
+                alpha=0.6,
+                k=params.k,
+                filters=params.filters if params.filters else None,
+            )
+        else:
+            # Text-only: standard CLIP text-to-image search
+            primary_results = search_engine.search_by_text(
+                query=params.query,
+                k=params.k,
+                filters=params.filters if params.filters else None,
+            )
 
     def _run_secondary():
         nonlocal secondary_results
+        # Secondary text pass only makes sense for text queries
+        if input_type in ("image", "hybrid"):
+            return
         raw_query = state.get("raw_query", "").strip()
-        # Only run secondary if the raw query is meaningfully different from primary
         if raw_query and raw_query.lower() != params.query.lower():
             secondary_results = search_engine.search_by_text(
                 query=raw_query,
                 k=8,
-                filters=None,   # No filters — broader recall
+                filters=None,
             )
 
-    # ── Parallel execution ────────────────────────────────────────────────
-    t1 = threading.Thread(target=_run_primary,   daemon=True)
-    t2 = threading.Thread(target=_run_secondary, daemon=True)
-    t1.start(); t2.start()
+    def _run_visual_web():
+        nonlocal bing_results
+        if input_type not in ("image", "hybrid"):
+            return
+        image_desc = state.get("image_description", "")
+        if not _serper_api_key or not image_desc:
+            return
+        # Use the condensed CLIP query as the search term; full image_description as
+        # the verification context (gives Gemini Vision the richest matching signal).
+        clip_query = (state.get("search_params") or {}).get("query", "")
+        search_query = clip_query if clip_query else image_desc.split(".")[0][:100]
+        results = _serper_react_search(search_query, context=image_desc, num=6)
+        if results:
+            logger.info(f"Visual web: {len(results)} verified products for image search")
+            bing_results = results
+
+    def _run_lens():
+        nonlocal lens_results
+        if input_type not in ("image", "hybrid") or not image_bytes:
+            return
+        lens_results = _serper_lens_search(image_bytes, num=6)
+
+    # ── All four run in parallel ──────────────────────────────────────────
+    t1 = threading.Thread(target=_run_primary,    daemon=True)
+    t2 = threading.Thread(target=_run_secondary,  daemon=True)
+    t3 = threading.Thread(target=_run_visual_web, daemon=True)
+    t4 = threading.Thread(target=_run_lens,       daemon=True)
+    t1.start(); t2.start(); t3.start(); t4.start()
     t1.join();  t2.join()
+    t3.join(timeout=15)   # visual-web: don't block main response beyond 15 s
+    t4.join(timeout=20)   # lens: slightly longer — image upload round-trip
 
     # ── Merge & deduplicate ───────────────────────────────────────────────
     seen: Dict[str, dict] = {}
@@ -1102,11 +1479,28 @@ def search_local_db(state: ChatState) -> ChatState:
             logger.info(f"Negative filter: {len(merged)} → {len(filtered)} products")
             merged = filtered
 
+    # ── Merge visual web + Google Lens results (deduplicate by URL) ───────
+    all_web: List[dict] = []
+    seen_urls: set = set()
+    for r in bing_results + lens_results:
+        url = r.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            all_web.append(r)
+
     logger.info(
-        f"Parallel search | primary={len(primary_results)} "
-        f"secondary={len(secondary_results)} unique={len(merged)}"
+        f"Parallel search | input={input_type} | primary={len(primary_results)} "
+        f"secondary={len(secondary_results)} unique={len(merged)} "
+        f"visual_web={len(bing_results)} lens={len(lens_results)}"
     )
-    return {**state, "local_results": merged}
+    return {
+        **state,
+        "local_results":      merged,
+        # Visual web + Lens results stored as web_results so quality_router
+        # knows not to overwrite them with a text-query web_search fallback.
+        "web_results":        all_web if all_web else state.get("web_results", []),
+        "web_search_triggered": bool(all_web) or state.get("web_search_triggered", False),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1118,12 +1512,27 @@ def rerank_results_node(state: ChatState) -> ChatState:
     Re-rank local results using Gemini.
     Uses the original user message + extracted features as scoring criteria
     (not just the expanded CLIP query) for better relevance judgment.
+
+    Skips Gemini re-ranking for image/hybrid inputs — CLIP visual similarity
+    is already the ground truth; re-ranking adds ~13 s with minimal benefit.
     """
     local_results = state.get("local_results", [])
     if not local_results:
         return {**state, "final_results": [], "results_quality": "empty"}
 
-    # Use original user query for re-ranking (not the expanded CLIP query)
+    image_desc = state.get("image_description")
+    input_type = state.get("input_type", "text")
+
+    # ── Fast path: image uploads — trust CLIP order, skip expensive Gemini call ──
+    if image_desc and input_type in ("image", "hybrid"):
+        for r in local_results:
+            r["llm_score"] = None
+            r["match_reason"] = _build_match_reason(r, FashionFeatures(**state.get("user_preferences", {})))
+        quality = "good"
+        logger.info(f"Image input — skip re-rank, using CLIP order | {len(local_results)} results")
+        return {**state, "final_results": local_results, "results_quality": quality}
+
+    # ── Text path: re-rank top 8 only (was all 20 — reduces Gemini payload) ──
     rerank_query = _get_last_user_message(state.get("messages", []))
 
     # Feature 3 — Personalized Re-ranking: inject full accumulated user preferences
@@ -1142,7 +1551,7 @@ def rerank_results_node(state: ChatState) -> ChatState:
     if dislikes:
         rerank_query = f"{rerank_query} | AVOID: {'; '.join(dislikes)}"
 
-    final = llm_service.rerank_results(rerank_query, local_results)
+    final = llm_service.rerank_results(rerank_query, local_results[:8])  # top-8 reduces Gemini payload ~60%
 
     # Feature 6 — Result Explanation: add match_reason to every product (rule-based, free)
     for r in final:
@@ -1180,24 +1589,21 @@ def rerank_results_node(state: ChatState) -> ChatState:
 
 def quality_router(state: ChatState) -> str:
     quality = state.get("results_quality", "empty")
+    input_type = state.get("input_type", "text")
+
     if quality == "good":
         return "generate_response"
     elif quality == "mediocre":
+        # Image speaks for itself — show what we found, don't ask for more info
+        if input_type in ("image", "hybrid"):
+            return "generate_response"
         return "clarification_check"
     else:
+        # Visual web results (from _run_visual_web) already present — don't overwrite
+        # with a text-query web_search (which would replace visual matches with link cards).
+        if state.get("web_results"):
+            return "generate_response"
         return "web_search"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Conditional Edge — Clarification Router
-# ─────────────────────────────────────────────────────────────────────────────
-
-def clarification_router(state: ChatState) -> str:
-    count = state.get("clarification_count", 0)
-    if count >= 2:
-        logger.info("Clarification limit reached — routing to web search")
-        return "web_search"
-    return "ask_clarification"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1405,6 +1811,7 @@ def outfit_completion_node(state: ChatState) -> ChatState:
     outfit_state: OutfitState = {
         "reference_product":    ref_product,
         "reference_attributes": {},
+        "stylist_guidance":     {},            # filled by oa_style_coordinate
         "complement_type":      type_label,
         "complement_item":      item_label,   # specific: "watch" / "heels" / "dupatta"
         "user_gender":          user_prefs.gender or "",
@@ -1457,6 +1864,340 @@ def outfit_completion_node(state: ChatState) -> ChatState:
 # ─────────────────────────────────────────────────────────────────────────────
 # Node 7B — Web Search (Direct Links — no Grounding)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _serper_search(query: str, num: int = 8) -> List[dict]:
+    """
+    Call Serper.dev Google Shopping API for real product results with images and prices.
+    Returns empty list if API key is not set or call fails — caller falls back to direct links.
+    """
+    if not _serper_api_key:
+        return []
+    try:
+        import requests
+        resp = requests.post(
+            "https://google.serper.dev/shopping",
+            headers={"X-API-KEY": _serper_api_key, "Content-Type": "application/json"},
+            json={"q": query, "gl": "in", "hl": "en", "num": num},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for item in data.get("shopping", [])[:num]:
+            results.append({
+                "title":        item.get("title", ""),
+                "url":          item.get("link", ""),
+                "price":        item.get("price"),
+                "image_url":    item.get("imageUrl"),
+                "source_site":  item.get("source"),
+                "rating":       item.get("rating"),
+                "rating_count": item.get("ratingCount"),
+                "snippet":      item.get("delivery"),
+            })
+        logger.info(f"Serper: {len(results)} products for '{query[:50]}'")
+        return results
+    except Exception as exc:
+        logger.warning(f"Serper search failed: {exc}")
+        return []
+
+
+def _upload_image_for_lens(image_bytes: bytes) -> Optional[str]:
+    """
+    Upload image bytes to catbox.moe (free, no auth, permanent hosting).
+    Returns a public URL suitable for Serper Lens, or None on failure.
+    """
+    try:
+        import requests
+        resp = requests.post(
+            "https://catbox.moe/user/api.php",
+            data={"reqtype": "fileupload"},
+            files={"fileToUpload": ("image.jpg", image_bytes, "image/jpeg")},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        url = resp.text.strip()
+        if url.startswith("http"):
+            return url
+        return None
+    except Exception as exc:
+        logger.warning(f"Image upload for Lens failed: {exc}")
+        return None
+
+
+def _serper_lens_search(image_bytes: bytes, num: int = 6) -> List[dict]:
+    """
+    Call Serper.dev Google Lens API for exact visual matches.
+    Uploads image to 0x0.st to get a public URL (Serper Lens requires a URL).
+    Returns results in the same web_results dict format as _serper_search.
+    """
+    if not _serper_api_key or not image_bytes:
+        return []
+    try:
+        import requests
+        public_url = _upload_image_for_lens(image_bytes)
+        if not public_url:
+            logger.warning("Google Lens skipped — image upload failed")
+            return []
+
+        resp = requests.post(
+            "https://google.serper.dev/lens",
+            headers={"X-API-KEY": _serper_api_key, "Content-Type": "application/json"},
+            json={"url": public_url},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        # Serper Lens returns matches under "organic" (not "visual_matches")
+        items = data.get("organic") or data.get("visual_matches") or []
+        for item in items[:num]:
+            results.append({
+                "title":       item.get("title", ""),
+                "url":         item.get("link", ""),
+                "price":       item.get("price"),
+                "image_url":   item.get("imageUrl"),
+                "source_site": item.get("source"),
+                "snippet":     item.get("snippet", ""),
+                "source":      "google_lens",
+            })
+        logger.info(f"Google Lens: {len(results)} visual matches for {public_url}")
+        return results
+    except Exception as exc:
+        logger.warning(f"Google Lens search failed: {exc}")
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Serper ReAct Verification Agent
+#
+# Problem: Serper sometimes returns visually unrelated products (wrong category,
+# wrong color, wrong style).  This ReAct agent adds a Gemini Vision verification
+# step that checks each product image against the search context, rejects
+# mismatches, and automatically refines the query for up to max_iter retries.
+#
+# ReAct loop per call:
+#   Search → Observe (Vision verify) → Reason (enough good results?)
+#          ↘ Refine query → Search … (repeat up to max_iter)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sv_fetch_image_bytes(url: str) -> Optional[bytes]:
+    """Fetch a product thumbnail with a short timeout. Returns None on failure."""
+    try:
+        import requests
+        resp = requests.get(url, timeout=3, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        return resp.content
+    except Exception:
+        return None
+
+
+def _sv_verify_products(
+    results: List[dict],
+    context: str,
+    query: str,
+) -> tuple:
+    """
+    Gemini Vision batch verification of Serper product images.
+
+    - Results without image_url: accepted via keyword overlap with query (fast path).
+    - Results with image_url: thumbnails fetched in parallel, then ONE Gemini Vision
+      call verifies all images against `context` in a single round-trip.
+
+    Returns (verified: List[dict], rejection_hints: List[str]).
+    Falls back to accepting ALL results if Gemini is unavailable or images fail to load.
+    """
+    import io
+    hints: List[str] = []
+
+    with_images    = [r for r in results if r.get("image_url")]
+    without_images = [r for r in results if not r.get("image_url")]
+
+    # Fast path: results with no image — accept by keyword overlap
+    query_kws = set(query.lower().split())
+    text_verified = [
+        r for r in without_images
+        if query_kws & set((r.get("title") or "").lower().split())
+    ]
+
+    if not with_images or not llm_service.is_enabled:
+        return (text_verified + with_images), hints
+
+    # Parallel thumbnail fetch (one thread per image, 4 s cap)
+    image_bytes_list: List[Optional[bytes]] = [None] * len(with_images)
+
+    def _fetch(idx: int, url: str):
+        image_bytes_list[idx] = _sv_fetch_image_bytes(url)
+
+    fetch_threads = [
+        threading.Thread(target=_fetch, args=(i, r["image_url"]), daemon=True)
+        for i, r in enumerate(with_images)
+    ]
+    for t in fetch_threads: t.start()
+    for t in fetch_threads: t.join(timeout=4)
+
+    try:
+        import PIL.Image
+
+        # Build list of (original_index, result, PIL_image) for all fetchable images
+        fetched: List[tuple] = []
+        for i, (r, img_bytes) in enumerate(zip(with_images, image_bytes_list)):
+            if img_bytes:
+                try:
+                    fetched.append((i, r, PIL.Image.open(io.BytesIO(img_bytes))))
+                except Exception:
+                    pass
+
+        # Images that couldn't be fetched/opened — accept them (can't verify)
+        unfetchable_idx = {fp[0] for fp in fetched}
+        unfetchable = [with_images[i] for i in range(len(with_images)) if i not in unfetchable_idx]
+
+        if not fetched:
+            return (text_verified + with_images), hints
+
+        # Build multimodal Gemini contents: alternating text labels + PIL images
+        contents: list = [
+            f"Fashion product verifier.\n"
+            f"Search context: \"{context}\"\n\n"
+            f"Each image below is a product thumbnail. Decide for EACH:\n"
+            f"  match=true  → correct item type AND visually fits the context\n"
+            f"  match=false → wrong item type OR clearly does not match context\n\n"
+        ]
+        for pos, (orig_idx, r, img) in enumerate(fetched):
+            contents.append(f"Image {pos}: {(r.get('title') or 'Unknown')[:60]}\n")
+            contents.append(img)
+        contents.append(
+            f"\nReturn ONLY a JSON array — one object per image (no markdown):\n"
+            f'[{{"index": 0, "match": true, "reason": "brief reason"}}, ...]'
+        )
+
+        raw = _gemini_vision_call(contents)
+        if not raw:
+            # Vision call failed — accept all (graceful degradation)
+            return (text_verified + with_images), hints
+
+        verdicts = json.loads(_clean_json(raw))
+        if not isinstance(verdicts, list):
+            raise ValueError("Expected JSON list")
+
+        verdict_by_pos = {v.get("index"): v for v in verdicts}
+        vision_verified: List[dict] = []
+        for pos, (orig_idx, r, _) in enumerate(fetched):
+            v = verdict_by_pos.get(pos, {})
+            if v.get("match", True):   # default True if verdict missing
+                vision_verified.append(r)
+            else:
+                hints.append(
+                    f"'{(r.get('title') or '')[:50]}' rejected: {v.get('reason', 'does not match')}"
+                )
+
+        logger.info(
+            f"Vision verify: {len(vision_verified)}/{len(fetched)} passed "
+            f"| {len(unfetchable)} unverifiable accepted | {len(hints)} rejections"
+        )
+        return (text_verified + vision_verified + unfetchable), hints
+
+    except Exception as exc:
+        logger.warning(f"Vision verify error ({exc}) — accepting all results as fallback")
+        return (text_verified + with_images), hints
+
+
+def _sv_refine_query(original_query: str, context: str, hints: List[str]) -> str:
+    """
+    Ask Gemini to generate a better Serper query based on what was rejected.
+    Falls back to the original query if Gemini is unavailable.
+    """
+    if not llm_service.is_enabled or not hints:
+        return original_query
+
+    hint_text = "\n".join(f"  - {h}" for h in hints[-4:])
+    prompt = (
+        f"A Google Shopping search returned mismatched products.\n\n"
+        f"Original query: '{original_query}'\n"
+        f"What I'm actually looking for: '{context}'\n\n"
+        f"Products that FAILED visual verification:\n{hint_text}\n\n"
+        "Generate ONE better Google Shopping search query (3-6 words).\n"
+        "Rules:\n"
+        "  - Be more specific about the exact item type\n"
+        "  - Use commercial product-title terms (not editorial language)\n"
+        "  - Address the mismatch reason from the failures above\n"
+        "Return ONLY the query — one line, no quotes, no explanation."
+    )
+    raw = _gemini_call(prompt)
+    if raw:
+        refined = raw.strip().strip('"').strip("'")
+        logger.info(f"Serper query refined: '{original_query}' → '{refined}'")
+        return refined
+    return original_query
+
+
+def _serper_react_search(
+    query: str,
+    context: str,
+    num: int = 8,
+    max_iter: int = 3,
+) -> List[dict]:
+    """
+    Serper Google Shopping search with Gemini Vision verification and ReAct retry.
+
+    ReAct cycle (max `max_iter` iterations):
+      1. Search  — call Serper with current query
+      2. Observe — verify each product image with Gemini Vision
+      3. Reason  — if < 3 verified results and iterations remain, refine query
+
+    Returns verified results. Falls back to last iteration's raw results if
+    verification consistently fails (e.g. Gemini Vision unavailable / all images
+    unfetchable).
+    """
+    if not _serper_api_key:
+        return []
+
+    verified: List[dict] = []
+    all_hints: List[str] = []
+    current_query = query
+    last_raw: List[dict] = []
+
+    for iteration in range(max_iter):
+        # ACT — search
+        raw_results = _serper_search(current_query, num)
+        if raw_results:
+            last_raw = raw_results
+
+        if not raw_results:
+            all_hints.append(f"Query '{current_query}' returned no results")
+            if iteration < max_iter - 1:
+                current_query = _sv_refine_query(query, context, all_hints)
+            continue
+
+        # OBSERVE — verify images
+        newly_verified, iter_hints = _sv_verify_products(raw_results, context, current_query)
+        all_hints.extend(iter_hints)
+
+        # Merge, deduplicate by URL
+        seen_urls = {r.get("url") for r in verified}
+        for r in newly_verified:
+            if r.get("url") not in seen_urls:
+                verified.append(r)
+                seen_urls.add(r.get("url"))
+
+        logger.info(
+            f"Serper ReAct iter {iteration + 1}/{max_iter}: "
+            f"query='{current_query[:60]}' → {len(newly_verified)}/{len(raw_results)} verified "
+            f"| total={len(verified)}"
+        )
+
+        # REASON — enough good results?
+        if len(verified) >= 3:
+            break
+
+        if iteration < max_iter - 1:
+            current_query = _sv_refine_query(query, context, all_hints)
+
+    if verified:
+        return verified[:num]
+    # Fallback: return raw results from last iteration (Gemini Vision unavailable)
+    logger.info("Serper ReAct: no verified results — returning raw last-iteration results")
+    return last_raw[:num]
+
 
 def _build_structured_web_query(
     features: FashionFeatures,
@@ -1561,52 +2302,62 @@ def web_search(state: ChatState) -> ChatState:
 
     logger.info(f"Web search | queries={search_queries} | platform={target_marketplace or 'any'}")
 
-    # ── Step 3: Build direct e-commerce search links ──────────────────────
-    # Always use direct links — grounding is removed because it consistently
-    # returns non-fashion sites (gift shops, decor wholesalers, etc.) for
-    # queries containing words like "wedding", "ethnic", or "occasion".
+    # ── Step 3: Try Serper.dev (with ReAct visual verification), fall back to direct links ──
     raw_q   = search_queries[0]
     encoded = urllib.parse.quote_plus(raw_q)
     short_q = raw_q[:55]
 
-    # Platform URL templates (all verified search endpoints)
-    platform_urls = {
-        "flipkart": ("Flipkart",      f"https://www.flipkart.com/search?q={encoded}",                          "flipkart.com"),
-        "amazon":   ("Amazon",        f"https://www.amazon.in/s?k={encoded}",                                  "amazon.in"),
-        "myntra":   ("Myntra",        f"https://www.myntra.com/search?rawQuery={encoded}",                     "myntra.com"),
-        "ajio":     ("Ajio",          f"https://www.ajio.com/search/?text={encoded}",                          "ajio.com"),
-        "meesho":   ("Meesho",        f"https://www.meesho.com/search?q={encoded}",                            "meesho.com"),
-        "nykaa":    ("Nykaa Fashion", f"https://www.nykaafashion.com/search?q={encoded}",                      "nykaafashion.com"),
-        "snapdeal": ("Snapdeal",      f"https://www.snapdeal.com/search?keyword={encoded}",                    "snapdeal.com"),
-        "tatacliq": ("Tata CLiQ",     f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}",   "tatacliq.com"),
-    }
-
-    if target_marketplace and target_marketplace in platform_urls:
-        # User asked for a specific platform — show it first, then top-3 others
-        ordered = [target_marketplace] + [k for k in ["myntra", "ajio", "amazon", "flipkart"] if k != target_marketplace]
-        direct_links = []
-        for key in ordered[:4]:
-            if key in platform_urls:
-                n, u, s = platform_urls[key]
-                direct_links.append(WebSearchResult(title=f"Search on {n}: {short_q}", url=u, source_site=s))
-        logger.info(f"Platform-specific links for: {target_marketplace}")
+    # Serper.dev — ReAct verified Google Shopping results with images and prices
+    # context = base_query (the structured fashion description) for Vision verification
+    serper_results = _serper_react_search(raw_q, context=base_query, max_iter=2)
+    if serper_results:
+        web_results = serper_results
+        logger.info(f"Serper ReAct results | query='{raw_q[:60]}' | {len(web_results)} verified products")
     else:
-        # Default order: fashion-dedicated platforms first (better category filters),
-        # then general marketplaces. 5 links total for good coverage.
-        direct_links = [
-            WebSearchResult(title=f"Myntra — {short_q}",   url=platform_urls["myntra"][1],   source_site="myntra.com"),
-            WebSearchResult(title=f"Ajio — {short_q}",     url=platform_urls["ajio"][1],     source_site="ajio.com"),
-            WebSearchResult(title=f"Amazon — {short_q}",   url=platform_urls["amazon"][1],   source_site="amazon.in"),
-            WebSearchResult(title=f"Flipkart — {short_q}", url=platform_urls["flipkart"][1], source_site="flipkart.com"),
-            WebSearchResult(title=f"Meesho — {short_q}",   url=platform_urls["meesho"][1],   source_site="meesho.com"),
-        ]
+        # Fallback: direct e-commerce search links (no API key or Serper failed)
+        # Platform URL templates (all verified search endpoints)
+        platform_urls = {
+            "flipkart": ("Flipkart",      f"https://www.flipkart.com/search?q={encoded}",                          "flipkart.com"),
+            "amazon":   ("Amazon",        f"https://www.amazon.in/s?k={encoded}",                                  "amazon.in"),
+            "myntra":   ("Myntra",        f"https://www.myntra.com/search?rawQuery={encoded}",                     "myntra.com"),
+            "ajio":     ("Ajio",          f"https://www.ajio.com/search/?text={encoded}",                          "ajio.com"),
+            "meesho":   ("Meesho",        f"https://www.meesho.com/search?q={encoded}",                            "meesho.com"),
+            "nykaa":    ("Nykaa Fashion", f"https://www.nykaafashion.com/search?q={encoded}",                      "nykaafashion.com"),
+            "snapdeal": ("Snapdeal",      f"https://www.snapdeal.com/search?keyword={encoded}",                    "snapdeal.com"),
+            "tatacliq": ("Tata CLiQ",     f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}",   "tatacliq.com"),
+        }
 
-    web_results = [r.model_dump() for r in direct_links]
-    logger.info(f"Direct links | query='{raw_q[:60]}' | {len(web_results)} platforms")
+        if target_marketplace and target_marketplace in platform_urls:
+            # User asked for a specific platform — show it first, then top-3 others
+            ordered = [target_marketplace] + [k for k in ["myntra", "ajio", "amazon", "flipkart"] if k != target_marketplace]
+            direct_links = []
+            for key in ordered[:4]:
+                if key in platform_urls:
+                    n, u, s = platform_urls[key]
+                    direct_links.append(WebSearchResult(title=f"Search on {n}: {short_q}", url=u, source_site=s))
+            logger.info(f"Platform-specific links for: {target_marketplace}")
+        else:
+            # Default order: fashion-dedicated platforms first (better category filters),
+            # then general marketplaces. 5 links total for good coverage.
+            direct_links = [
+                WebSearchResult(title=f"Myntra — {short_q}",   url=platform_urls["myntra"][1],   source_site="myntra.com"),
+                WebSearchResult(title=f"Ajio — {short_q}",     url=platform_urls["ajio"][1],     source_site="ajio.com"),
+                WebSearchResult(title=f"Amazon — {short_q}",   url=platform_urls["amazon"][1],   source_site="amazon.in"),
+                WebSearchResult(title=f"Flipkart — {short_q}", url=platform_urls["flipkart"][1], source_site="flipkart.com"),
+                WebSearchResult(title=f"Meesho — {short_q}",   url=platform_urls["meesho"][1],   source_site="meesho.com"),
+            ]
+
+        web_results = [r.model_dump() for r in direct_links]
+        logger.info(f"Direct links | query='{raw_q[:60]}' | {len(web_results)} platforms")
 
     return {
         **state,
         "web_search_triggered": True,
+        # Only lock the session into web-search mode when the user EXPLICITLY chose a
+        # marketplace ("show me on Myntra"). System-initiated fallbacks (poor FAISS quality)
+        # must NOT set this — otherwise a single bad local-search result would break all
+        # future image uploads by routing them to Serper instead of CLIP.
+        "web_search_mode":      state.get("web_search_mode", False) or (state.get("intent") == "marketplace_search"),
         "search_queries":       search_queries,
         "web_results":          web_results,
         "final_results":        [],
@@ -1747,7 +2498,7 @@ def generate_response(state: ChatState) -> ChatState:
         "Return ONLY the reply text."
     )
 
-    reply = _gemini_call(prompt)
+    reply = _gemini_call(prompt, model=_CHAT_MODEL, disable_thinking=False)  # thinking on for richer reply
     if not reply:
         reply = (
             f"I found {len(final_results)} items for you!" if final_results
@@ -1874,10 +2625,15 @@ def _build_graph():
     def _post_extract_router(s: ChatState) -> str:
         if s["intent"] == "marketplace_search":
             return "web_search"
+        # Sticky: once user has switched to online shopping, keep text refinements online.
+        # Image uploads are EXCLUDED — they must always go through CLIP visual similarity search.
+        if s.get("web_search_mode", False) and s.get("input_type", "text") not in ("image", "hybrid"):
+            return "web_search"
         if (
             s["intent"] == "new_search"
             and "garment_type" in s.get("missing_slots", [])
             and s.get("clarification_count", 0) == 0
+            and s.get("input_type", "text") not in ("image", "hybrid")  # image speaks for itself
         ):
             return "ask_clarification"
         return "search_local_db"
@@ -1904,9 +2660,7 @@ def _build_graph():
         },
     )
 
-    # Clarification count check inline in ask_clarification node
-    # (clarification_router logic is embedded: if count >= 2 after increment → web_search)
-    # We handle this by adding a post-clarification edge check:
+    # After clarification the bot waits for the next user message — always → update_memory
     graph.add_conditional_edges(
         "ask_clarification",
         lambda s: "update_memory",   # always go to memory (user waits for next msg)
@@ -1951,11 +2705,18 @@ class ChatService:
         self._sessions: Dict[str, dict] = {}
 
     def initialize(self) -> None:
-        global _outfit_agent
+        global _outfit_agent, _serper_api_key
         if not LANGGRAPH_AVAILABLE:
             logger.warning("LangGraph not installed — chat using simple fallback")
             return
         try:
+            from app.config import get_settings
+            settings = get_settings()
+            _serper_api_key = settings.serper_api_key
+            if _serper_api_key:
+                logger.info("Serper.dev API key loaded — ReAct-verified product cards enabled")
+            else:
+                logger.info("Serper.dev API key not set — using direct links only")
             self._graph = _build_graph()
             logger.info("LangGraph chat graph compiled successfully")
             _outfit_agent = _build_outfit_subgraph()
@@ -1969,6 +2730,7 @@ class ChatService:
         conversation_id: str,
         input_type: str = "text",
         image_description: Optional[str] = None,
+        image_bytes: Optional[bytes] = None,
         user_preferences: Optional[dict] = None,
         clarification_count: int = 0,
     ) -> dict:
@@ -1985,6 +2747,7 @@ class ChatService:
         last_shown_product     = session.get("last_shown_product", {})   # Full product dict for ReAct
         last_search_query      = session.get("last_search_query", "")
         awaiting_outfit_detail = session.get("awaiting_outfit_detail", False)
+        web_search_mode        = session.get("web_search_mode", False)   # Sticky online-only mode
 
         initial_state: ChatState = {
             "messages":            messages,
@@ -1992,6 +2755,7 @@ class ChatService:
             "input_type":          input_type,
             "raw_query":           _get_last_user_message(messages),
             "image_description":   image_description,
+            "image_bytes":         image_bytes,
             "current_features":    {},
             "user_preferences":    accumulated_prefs,
             "search_params":       {},
@@ -2014,6 +2778,7 @@ class ChatService:
             "last_shown_product":     last_shown_product,
             "last_search_query":      last_search_query,
             "awaiting_outfit_detail": awaiting_outfit_detail,
+            "web_search_mode":        web_search_mode,
         }
 
         if self._graph is not None:
@@ -2042,13 +2807,21 @@ class ChatService:
                                       or result.get("last_search_query", "")
                                       or session.get("last_search_query", ""),
             "awaiting_outfit_detail": result.get("awaiting_outfit_detail", False),
+            # Once True, stays True for the whole session thread
+            "web_search_mode":        result.get("web_search_mode", False) or session.get("web_search_mode", False),
         }
-        # Remember the last shown products for outfit completion context
+        # Remember the last shown products for outfit completion context.
+        # Check local products first, then Serper web results (both carry title/image).
         shown = result.get("products_to_show", [])
+        web_res = result.get("web_results", [])
         if shown:
-            # Store full first product dict for ReAct subgraph attribute extraction
             session_update["last_shown_product"] = shown[0]
             titles = [p.get("title", "") for p in shown[:2] if p.get("title")]
+            session_update["last_shown"] = " and ".join(titles)
+        elif web_res and web_res[0].get("title"):
+            # Web search result (Serper product card) — use as outfit reference too
+            session_update["last_shown_product"] = web_res[0]
+            titles = [r.get("title", "") for r in web_res[:2] if r.get("title")]
             session_update["last_shown"] = " and ".join(titles)
         else:
             # Preserve from previous turn so outfit completion still has a reference
@@ -2085,11 +2858,17 @@ def _simple_fallback(state: ChatState) -> ChatState:
         state = web_search(state)
     elif intent in ("new_search", "refine"):
         state = extract_fashion_features(state)
+        # Sticky web-search mode — user already switched to online shopping.
+        # Image uploads are excluded (they always use CLIP, not Serper).
+        if state.get("web_search_mode", False) and state.get("input_type", "text") not in ("image", "hybrid"):
+            state = web_search(state)
         # Proactive slot gate — ask before searching if garment_type is unknown
-        if (
+        # Skip for image/hybrid inputs: the uploaded image already defines the product
+        elif (
             intent == "new_search"
             and "garment_type" in state.get("missing_slots", [])
             and state.get("clarification_count", 0) == 0
+            and state.get("input_type", "text") not in ("image", "hybrid")
         ):
             state = ask_clarification(state)
         else:

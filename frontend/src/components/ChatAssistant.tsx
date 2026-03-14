@@ -2,10 +2,11 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Image from 'next/image'
-import { Send, Sparkles, ExternalLink, ImageIcon, X } from 'lucide-react'
+import { Send, Sparkles, ExternalLink, ImageIcon, X, Shirt } from 'lucide-react'
 import { ChatMessage, SearchResult } from '@/types'
 import { sendChatMessage } from '@/lib/api'
 import { formatPrice, formatSimilarity } from '@/lib/utils'
+import TryOnModal from './TryOnModal'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,10 @@ interface WebLink {
   snippet?: string
   price?: string
   source_site?: string
+  image_url?: string
+  rating?: number
+  rating_count?: number
+  source?: string   // "google_lens" | undefined (undefined = web/serper search)
 }
 
 interface MessageBubble {
@@ -46,9 +51,11 @@ const SUGGESTIONS = [
 function ProductCard({
   product,
   onProductClick,
+  onTryOn,
 }: {
   product: SearchResult
   onProductClick: (p: SearchResult) => void
+  onTryOn: (imageUrl: string, title: string) => void
 }) {
   return (
     <div
@@ -76,26 +83,98 @@ function ProductCard({
             {formatPrice(product.price, product.currency)}
           </p>
         )}
-        {product.product_url && (
-          <a
-            href={product.product_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="mt-1 flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800"
+        <div className="mt-1 flex items-center gap-2">
+          {product.product_url && (
+            <a
+              href={product.product_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800"
+            >
+              <ExternalLink className="h-3 w-3" />
+              View
+            </a>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onTryOn(product.image_url, product.title) }}
+            className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800"
+            title="Virtual Try-On"
           >
-            <ExternalLink className="h-3 w-3" />
-            View
-          </a>
-        )}
+            <Shirt className="h-3 w-3" />
+            Try
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 
+// ── Source badge ───────────────────────────────────────────────────────────
+
+function SourceBadge({ source }: { source?: string }) {
+  if (source === 'google_lens') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+        🔍 Google Lens
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+      🛒 Web Search
+    </span>
+  )
+}
+
 // ── Web link card ──────────────────────────────────────────────────────────
 
-function WebLinkCard({ link }: { link: WebLink }) {
+function WebLinkCard({ link, onTryOn }: { link: WebLink; onTryOn: (imageUrl: string, title: string) => void }) {
+  // Product card (Serper results — has image)
+  if (link.image_url) {
+    return (
+      <div className="flex items-start gap-3 p-3 bg-white border border-gray-200 rounded-xl hover:border-purple-300 hover:shadow-sm transition-all">
+        <a href={link.url} target="_blank" rel="noopener noreferrer" className="w-20 h-20 relative flex-shrink-0 rounded-lg overflow-hidden bg-gray-100">
+          <Image
+            src={link.image_url}
+            alt={link.title}
+            fill
+            className="object-cover"
+            sizes="80px"
+          />
+        </a>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <SourceBadge source={link.source} />
+          </div>
+          <a href={link.url} target="_blank" rel="noopener noreferrer">
+            <p className="text-sm font-medium text-gray-900 line-clamp-2 leading-tight hover:text-purple-700">{link.title}</p>
+          </a>
+          {link.price && (
+            <p className="text-sm font-bold text-gray-900 mt-1">{link.price}</p>
+          )}
+          {link.rating && (
+            <p className="text-xs text-amber-600 mt-0.5">
+              ★ {link.rating.toFixed(1)}{link.rating_count ? ` (${link.rating_count.toLocaleString()})` : ''}
+            </p>
+          )}
+          <p className="text-xs text-purple-600 mt-0.5">{link.source_site || link.url}</p>
+          {link.snippet && (
+            <p className="text-xs text-emerald-700 mt-1 line-clamp-2 italic">{link.snippet}</p>
+          )}
+          <button
+            onClick={() => onTryOn(link.image_url!, link.title)}
+            className="mt-2 flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 font-medium"
+          >
+            <Shirt className="h-3 w-3" />
+            Virtual Try-On
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Link card (direct e-commerce search links — no image)
   return (
     <a
       href={link.url}
@@ -135,6 +214,13 @@ export default function ChatAssistant({ onProductClick }: ChatAssistantProps) {
   const [conversationId, setConversationId] = useState<string | undefined>()
   const [userPreferences, setUserPreferences] = useState<Record<string, unknown>>({})
   const [clarificationCount, setClarificationCount] = useState(0)
+
+  // Virtual Try-On state
+  const [tryOnGarment, setTryOnGarment] = useState<{ imageUrl: string; title: string } | null>(null)
+
+  const openTryOn = (imageUrl: string, title: string) => {
+    setTryOnGarment({ imageUrl, title })
+  }
 
   // API-format messages (role + content only)
   const apiMessages = useRef<ChatMessage[]>([])
@@ -279,27 +365,40 @@ export default function ChatAssistant({ onProductClick }: ChatAssistantProps) {
                 )}
               </div>
 
-              {/* Product cards strip */}
+              {/* Product cards strip — Local Database results */}
               {msg.products && msg.products.length > 0 && (
-                <div className="flex gap-3 overflow-x-auto pb-2">
-                  {msg.products.map((product) => (
-                    <ProductCard
-                      key={product.id}
-                      product={product}
-                      onProductClick={onProductClick}
-                    />
-                  ))}
+                <div>
+                  <p className="text-xs font-semibold px-1 mb-2 flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                      📦 Local Database
+                    </span>
+                    <span className="text-gray-400 font-normal">{msg.products.length} results</span>
+                  </p>
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                    {msg.products.map((product) => (
+                      <ProductCard
+                        key={product.id}
+                        product={product}
+                        onProductClick={onProductClick}
+                        onTryOn={openTryOn}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* Web search links */}
+              {/* Web search links — Serper Shopping + Google Lens */}
               {msg.webLinks && msg.webLinks.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-500 font-medium px-1">
-                    🌐 Search results from the web:
+                    {msg.webLinks.some(l => l.image_url)
+                      ? '🌐 Online results:'
+                      : '🌐 Search results from the web:'}
+                    {' '}
+                    <span className="text-gray-400 font-normal">{msg.webLinks.length} found</span>
                   </p>
                   {msg.webLinks.map((link, li) => (
-                    <WebLinkCard key={li} link={link} />
+                    <WebLinkCard key={li} link={link} onTryOn={openTryOn} />
                   ))}
                 </div>
               )}
@@ -387,6 +486,15 @@ export default function ChatAssistant({ onProductClick }: ChatAssistantProps) {
           Powered by Gemini AI + CLIP · LangGraph
         </p>
       </div>
+
+      {/* Virtual Try-On Modal */}
+      {tryOnGarment && (
+        <TryOnModal
+          garmentImageUrl={tryOnGarment.imageUrl}
+          garmentTitle={tryOnGarment.title}
+          onClose={() => setTryOnGarment(null)}
+        />
+      )}
     </div>
   )
 }

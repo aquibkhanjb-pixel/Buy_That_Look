@@ -29,6 +29,7 @@ from app.services.search_engine import search_engine
 from app.services.cache_service import cache_service
 from app.services.llm_service import llm_service
 from app.services.chat_service import chat_service
+from app.services.tryon_service import tryon_service
 
 settings = get_settings()
 
@@ -101,6 +102,7 @@ async def lifespan(app: FastAPI):
 
     # Initialise Chat service (LangGraph)
     chat_service.initialize()
+    tryon_service.initialize(settings.hf_token)
     logger.info("Chat service (LangGraph) initialised")
 
     logger.info("Application startup complete")

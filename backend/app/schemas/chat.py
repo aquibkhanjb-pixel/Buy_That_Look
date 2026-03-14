@@ -104,9 +104,13 @@ class SearchParams(BaseModel):
 class WebSearchResult(BaseModel):
     title: str
     url: str
-    snippet: Optional[str] = None
-    price: Optional[str] = None
-    source_site: Optional[str] = None
+    snippet: Optional[str] = None       # delivery info / description snippet
+    price: Optional[str] = None         # e.g. "₹1,499"
+    source_site: Optional[str] = None   # e.g. "Myntra", "ajio.com"
+    image_url: Optional[str] = None     # product thumbnail (Serper results only)
+    rating: Optional[float] = None      # e.g. 4.5
+    rating_count: Optional[int] = None  # e.g. 2340
+    source: Optional[str] = None        # "google_lens" | None (None = web/serper search)
 
 
 # ── Chat message ──────────────────────────────────────────────────────────

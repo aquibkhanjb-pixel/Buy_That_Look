@@ -94,7 +94,9 @@
       "Bash(powershell -Command:*)",
       "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -m pip install langgraph langchain langchain-google-genai)",
       "Bash(\"/c/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\" -c \"import langgraph, langchain, langchain_google_genai; print\\(''langgraph:'', langgraph.__version__\\); print\\(''langchain:'', langchain.__version__\\); print\\(''langchain_google_genai: OK''\\)\")",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(\"C:/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\":*)",
+      "Bash(npm run:*)"
     ]
   }
 }

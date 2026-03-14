@@ -1,12 +1,12 @@
 import axios from 'axios'
-import { SearchResponse, SearchFilters, ChatMessage, ChatResponse } from '@/types'
+import { SearchResponse, SearchFilters, ChatMessage, ChatResponse, TryOnResponse } from '@/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const API_PREFIX = '/api/v1'
 
 const api = axios.create({
   baseURL: `${API_URL}${API_PREFIX}`,
-  timeout: 30000,
+  timeout: 90000,
 })
 
 export async function searchByImage(
@@ -91,6 +91,23 @@ export async function getSimilarProducts(productId: string, k: number = 20) {
 
 export async function getHealthStatus() {
   const response = await api.get('/health/ready')
+  return response.data
+}
+
+export async function virtualTryOn(
+  personImage: File,
+  garmentImageUrl: string,
+  garmentDescription: string = '',
+): Promise<TryOnResponse> {
+  const formData = new FormData()
+  formData.append('person_image', personImage)
+  formData.append('garment_image_url', garmentImageUrl)
+  formData.append('garment_description', garmentDescription)
+
+  const response = await api.post<TryOnResponse>('/tryon/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 180000,  // 3 min — HuggingFace queue can be slow
+  })
   return response.data
 }
 
