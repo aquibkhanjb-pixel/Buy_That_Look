@@ -23,8 +23,6 @@ from slowapi.errors import RateLimitExceeded
 from app.api import api_router
 from app.config import get_settings
 from app.core.logging import setup_logging, logger
-from app.core.database import init_db
-from app.services.cache_service import cache_service
 from app.services.llm_service import llm_service
 from app.services.chat_service import chat_service
 from app.services.tryon_service import tryon_service
@@ -44,20 +42,6 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-
-    # Initialize database tables
-    try:
-        init_db()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.warning(f"Database initialization skipped: {e}")
-
-    # Connect to Redis
-    logger.info("Connecting to Redis...")
-    if cache_service.connect():
-        logger.info("Redis connected - caching enabled")
-    else:
-        logger.warning("Redis unavailable - caching disabled")
 
     # LangSmith tracing — env vars already loaded by load_dotenv() at module level
     if os.environ.get("LANGCHAIN_TRACING_V2", "").lower() == "true" and os.environ.get("LANGCHAIN_API_KEY"):
@@ -96,18 +80,17 @@ app = FastAPI(
     A hybrid multi-modal fashion recommendation system that enables users to
     discover visually similar fashion products using:
 
-    - **Image Search**: Upload a fashion item image to find similar products
-    - **Text Search**: Describe what you're looking for in natural language
-    - **Hybrid Search**: Combine both modalities for refined results
+    - **AI Chat Assistant**: Conversational product discovery with Gemini
+    - **Web Search**: Real-time product search via Serper.dev
+    - **Visual Try-On**: Upload your photo to try on garments
+    - **Trend Discovery**: Curated weekly fashion trends
 
     ### Features
-    - Multi-modal search powered by CLIP embeddings
-    - Real-time similarity computation using FAISS
-    - Redis caching for fast repeated queries
+    - Conversational AI powered by Gemini + LangGraph
+    - Real-time web product search via Serper.dev
+    - Image understanding with Gemini Vision
     - Rate limiting to prevent abuse
-    - Search analytics logging
-    - Filter by price, category, brand, and more
-    - Direct purchase links to e-commerce platforms
+    - Direct purchase links to e-commerce platforms (Myntra, Ajio, Amazon, Flipkart)
     """,
     lifespan=lifespan,
     docs_url="/docs",

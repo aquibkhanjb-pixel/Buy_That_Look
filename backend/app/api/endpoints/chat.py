@@ -4,12 +4,10 @@ import json
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, File, Form, UploadFile, HTTPException
+from fastapi import APIRouter, Request, File, Form, UploadFile, HTTPException
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy.orm import Session
 
-from app.core.database import get_db
 from app.core.logging import logger
 from app.schemas.chat import ChatResponse, WebSearchResult
 from app.schemas.search import SearchResult
@@ -63,7 +61,6 @@ async def chat(
     from_trend: bool = Form(default=False),
     # Optional image
     image: Optional[UploadFile] = File(default=None, description="Optional image for visual search"),
-    db: Session = Depends(get_db),
 ):
     """
     AI Fashion Assistant — conversational product discovery.
