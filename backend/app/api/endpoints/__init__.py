@@ -1,3 +1,3 @@
 """API endpoint modules."""
 
-from . import search, products, health
+from . import products, health, chat, tryon, trends

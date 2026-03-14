@@ -1,7 +1,7 @@
 # AI Fashion Assistant — Interview Explanation Guide
 
 ## One-Line Summary
-> "I built a multi-modal conversational fashion assistant using LangGraph and Gemini AI that understands natural language, extracts structured outfit attributes, searches a vector database, and falls back to live web search when local results aren't good enough."
+> "I built a multi-modal conversational fashion assistant using LangGraph and Gemini AI that understands natural language, extracts structured outfit attributes, searches the live web and Google Lens for real products, and completes outfits using a ReAct reasoning loop."
 
 ---
 
@@ -15,28 +15,32 @@
 1. **Understands intent** — knows when you want to search vs. when you're just saying 'thanks'
 2. **Extracts structured attributes** — pulls out colour, garment type, occasion, budget, style from natural conversation
 3. **Remembers preferences** — if you said 'I'm looking for women's wear' in turn 1, you don't need to say it again in turn 5
-4. **Falls back to web** — if our database doesn't have what you want, it searches Ajio, Myntra, Amazon for you"
+4. **Searches the live web** — finds real products from Myntra, Ajio, Amazon, Flipkart using Serper.dev
+5. **Uses Google Lens** — when you upload a photo, it finds visually identical products from across the internet"
 
 ---
 
 ## The Architecture — What to Draw on a Whiteboard
 
 ```
-User message
+User message (+ optional image)
     ↓
-Classify Intent (Gemini)
+Classify Intent (Gemini) — or keyword fallback if quota hit
     ↓
 Extract Fashion Features (Gemini) ← KEY NODE
     ↓
-Build CLIP Query from structured features
+Build structured web search query
     ↓
-FAISS Vector Search
+web_search node (3 parallel threads):
+  ├── Serper text search (verified by Gemini Vision)
+  ├── Visual web search     [if image uploaded]
+  └── Google Lens           [if image uploaded]
     ↓
-Gemini Re-ranking (score each result 0-10)
+Merged + deduplicated results
     ↓
-Quality Gate: good? → show results
-              poor? → ask clarification (max 2x)
-              still poor? → web search fallback
+generate_response (Gemini) + feature suggestion hint
+    ↓
+update_memory (10-turn rolling window)
 ```
 
 ---
@@ -63,13 +67,12 @@ we first call Gemini to extract **structured attributes**:
 }
 ```
 
-**CLIP Query built from features:** `"women dress boho for beach relaxed"`
+**Structured query built from features:** `"women boho beach dress relaxed under ₹1500"`
 
-**This is much better than** passing "something flowy for Goa trip boho vibe" directly to CLIP,
-because CLIP works best with specific fashion descriptors, not conversational language.
+**This is much better than** passing "something flowy for Goa trip boho vibe" directly to a search engine, because structured queries produce far more precise results.
 
 ### Why it matters for interviews
-- Shows you understand the gap between **natural language** and **embedding model input**
+- Shows you understand the gap between **natural language** and **search engine input**
 - Demonstrates knowledge of **structured output with LLMs** (not just free-text generation)
 - Explains why you need **two LLM calls** (classify intent + extract features) rather than one
 
@@ -78,134 +81,73 @@ because CLIP works best with specific fashion descriptors, not conversational la
 ## Memory — How It Works Across Turns
 
 ```
-Turn 1: "Show me kurtas for men"
-         → user_preferences = {gender: "men", garment_type: "kurta"}
+Turn 1: "Show me women's kurtas under ₹2000"
+  → FashionFeatures: { garment="kurta", gender="women", max_price=2000 }
 
-Turn 2: "Under 800 rupees"
-         → current_features = {max_price: 800}
-         → merged = {gender: "men", garment_type: "kurta", max_price: 800}  ✓ memory works!
+Turn 2: "In blue"
+  → FashionFeatures.merge(): { garment="kurta", gender="women", max_price=2000, color=["blue"] }
+  ← gender and price automatically carried forward
 
-Turn 3: "In blue"
-         → current_features = {color: ["blue"]}
-         → merged = {gender: "men", garment_type: "kurta", max_price: 800, color: ["blue"]}  ✓
+Turn 3: "Show me a ring to match"
+  → Category switch detected! garment changed kurta → ring
+  → Reset: color, style, fabric, fit (product-specific)
+  → Keep: gender="women", max_price=2000 (user-level prefs)
 ```
 
-**Key design decision:** Features are merged using a `merge()` method that
-**never overwrites with None** — so saying "in blue" doesn't erase the gender or budget.
-
-**How memory is implemented:**
-- Server-side: `ChatService` stores accumulated preferences in a Python dict keyed by `conversation_id`
-- Client-side: Frontend also mirrors preferences and sends them back on each request (safety net)
-- Rolling window: last 10 conversation turns are kept; older ones are dropped to manage token limits
+`FashionFeatures.merge()` never overwrites existing values with None — this is the key invariant that makes multi-turn refinement work.
 
 ---
 
-## The LangGraph Connection
+## Google Lens Integration
 
-### Why LangGraph and not just if/else?
+When the user uploads an image:
 
-| Approach | Problem |
-|----------|---------|
-| Simple if/else | Hard to maintain, no state management, can't add nodes easily |
-| LangGraph StateGraph | Clean graph structure, typed state, built-in conditional routing, easy to extend |
+1. **Gemini Vision** describes the image → used for visual web search
+2. **catbox.moe** hosts the image publicly (Serper Lens needs a URL, not base64)
+3. **Serper `/lens`** returns visually identical products from across the internet
+4. Results parsed from `"organic"` key, merged with text search results
 
-### What LangGraph gives us
-1. **StateGraph** — all nodes share typed state (`ChatState TypedDict`), no global variables
-2. **Conditional edges** — routing logic (quality_router, intent_router, feedback_router) is clean and testable
-3. **Composability** — easy to add new nodes (e.g. a "style advice" node) without touching other nodes
-
-### The graph structure
-```python
-graph.add_conditional_edges(
-    "classify_intent",
-    lambda s: "extract_features" if s["intent"] in ("new_search", "refine")
-              else "handle_feedback" if "feedback" in s["intent"]
-              else "generate_response",
-    {...}
-)
-```
-This is the core routing logic — clean, readable, testable.
+This means a user can photograph an outfit anywhere in the world and find where to buy it online.
 
 ---
 
-## The Web Search Fallback
+## Outfit Completion — ReAct Agent
 
-### When does it trigger?
-1. Local FAISS search returns empty results
-2. Best Gemini re-ranking score < 3 (very poor match)
-3. User says "I don't like any of these" (very_unsatisfied feedback)
-4. User has been asked clarifying questions twice with no improvement
+"What goes with this?" triggers a 5-node ReAct subgraph:
 
-### How it works
-1. Gemini generates 3-5 targeted search queries from the extracted features
-2. Tries Gemini Grounding (google_search tool) for live results
-3. Falls back to generating direct e-commerce search links (Ajio, Myntra, Amazon, Flipkart)
-
-### Example
 ```
-user_preferences = {garment_type: "kurta", color: ["blue"], gender: "men", max_price: 1000}
-→ Generated queries: ["blue cotton kurta men", "mens ethnic blue kurta", "light blue kurta under 1000"]
-→ Direct links: ajio.com/s/blue+cotton+kurta+men, myntra.com/blue+cotton+kurta+men ...
+Extract attributes from reference product
+    ↓
+Fashion stylist Gemini call → ideal complement + colour palette
+    ↓
+Generate search query
+    ↓
+Search Serper for complementary items
+    ↓
+Evaluate: do results match style + colour palette?
+    ├── good → format_response
+    └── poor + iter < 5 → refine query (loop)
 ```
 
----
-
-## Pydantic Validation — Why It Matters
-
-"I used Pydantic for all data models in the chat system because:
-1. **Type safety** — if Gemini returns a price as a string, Pydantic coerces it to float
-2. **Validation** — search k must be between 1-50, enforced at the data layer
-3. **Serialization** — clean `.model_dump()` to pass between LangGraph nodes
-4. **The `merge()` method** — I added a custom method on `FashionFeatures` to accumulate preferences across turns safely"
+This is **ReAct (Reason + Act)** — the model reasons about what it found, then decides whether to act again (refine) or stop.
 
 ---
 
-## Multi-modal Input in Chat
+## Resilience Mechanisms
 
-"The chat tab supports both text and image input:
-- User uploads an image → Gemini Vision describes it → description fed into Feature Extractor
-- User adds text → combined with image description
-- CLIP encodes both → hybrid embedding (65% visual + 35% text)
-
-This means you can upload a dress photo and say 'find something similar but in blue' — the system understands both signals."
-
----
-
-## Metrics / Results
-
-- **Query expansion** lifts result quality: "beach party" → 16 results with 8.0 avg score vs. 3 results with 4.0
-- **Feature extraction** improves precision: structured CLIP query outperforms raw conversational text
-- **Re-ranking**: filters out irrelevant results — scores < 3 are hidden, scores 3-5 shown as "possible matches"
-- **Web fallback**: ensures user always gets SOMETHING useful even when our database has no match
+| Failure | Response |
+|---------|---------|
+| Gemini quota (429) | 60s circuit breaker; keyword intent fallback |
+| Gemini 503 | 30s circuit breaker; graceful error message |
+| No products found | Direct shopping links: Myntra → Ajio → Amazon → Flipkart → Meesho |
+| Image upload | catbox.moe + Serper Lens as backup to text search |
 
 ---
 
-## Common Interview Questions
+## One-Line Answer for "How does image search work?"
 
-**Q: Why not just send the user's message directly to CLIP?**
-A: "CLIP is trained on image-text pairs with short, descriptive captions — not conversational language. 'Something flowy for Goa trip boho vibe' gets much worse results than 'women boho beach relaxed dress'. The Feature Extraction node bridges the gap between how users talk and how CLIP understands."
+> "The user's image is uploaded to a free hosting service to get a public URL. That URL is sent to Serper's Google Lens endpoint, which returns visually similar products from across the internet. In parallel, Gemini Vision describes the image and that description is used for a separate text-based Serper search. Both results are merged and verified by Gemini Vision before showing to the user."
 
-**Q: Why two separate LLM calls (classify_intent + extract_features)?**
-A: "Separation of concerns. Mixing routing logic with feature extraction in one prompt leads to worse results on both tasks. Intent classification needs to focus on the conversational context. Feature extraction needs to focus on fashion attributes. Two focused calls outperform one mixed call."
+## One-Line Answer for "Why not use a local vector database?"
 
-**Q: How do you handle the latency of multiple Gemini calls?**
-A: "The full pipeline (classify intent + extract features + re-rank + generate response) takes about 4-6 seconds. I mitigate this with a typing indicator in the UI, and the quality improvement justifies the wait. For production at scale, I'd cache embeddings for repeated queries and potentially batch calls."
-
-**Q: What would you add next?**
-A: "A user profile that persists across sessions (PostgreSQL storage), outfit combination suggestions ('this kurta pairs well with...'), and a size recommendation based on brand-specific size charts."
-
----
-
-## Tech Stack Summary
-
-| Component | Technology |
-|-----------|-----------|
-| Conversation orchestration | LangGraph StateGraph |
-| Intent + feature extraction | Google Gemini (gemini-flash-lite-latest) |
-| Visual + text embeddings | OpenAI CLIP (ViT-B/32) |
-| Vector search | FAISS |
-| Web fallback | Gemini Grounding + direct e-commerce links |
-| Data validation | Pydantic v2 |
-| API | FastAPI |
-| Frontend | Next.js 14 + TypeScript + Tailwind CSS |
-| Data store | PostgreSQL + 1,544 Ajio products |
+> "We removed FAISS and CLIP entirely. A local database gets stale, requires an embedding pipeline, and is limited to whatever we scraped. Serper.dev gives us real-time product discovery from every major Indian e-commerce site, and Google Lens finds visually identical products that no keyword query would surface. The quality and freshness is far superior."

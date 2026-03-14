@@ -12,9 +12,37 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.logging import logger
 from app.schemas.chat import ChatResponse, WebSearchResult
+from app.schemas.search import SearchResult
 from app.services.chat_service import chat_service
 from app.services.llm_service import llm_service
-from app.api.endpoints.search import convert_to_search_results
+from typing import List
+
+
+def convert_to_search_results(raw_results: List[dict]) -> List[SearchResult]:
+    results = []
+    for item in raw_results:
+        try:
+            results.append(SearchResult(
+                id=str(item.get("id", "")),
+                product_id=item.get("product_id", ""),
+                title=item.get("title", "Unknown"),
+                description=item.get("description"),
+                brand=item.get("brand"),
+                price=item.get("price"),
+                original_price=item.get("original_price"),
+                currency=item.get("currency", "USD"),
+                category=item.get("category"),
+                subcategory=item.get("subcategory"),
+                color=item.get("color"),
+                image_url=item.get("image_url", ""),
+                product_url=item.get("product_url", ""),
+                source_site=item.get("source_site", ""),
+                similarity=item.get("similarity", 0.0),
+                llm_score=item.get("llm_score"),
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to convert search result: {e}")
+    return results
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)

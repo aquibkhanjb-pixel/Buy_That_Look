@@ -1,7 +1,7 @@
 """
 Fashion Recommendation System - FastAPI Application
 
-Multi-modal fashion search API using CLIP embeddings and FAISS.
+AI-powered fashion recommendation API using Gemini and Serper web search.
 """
 
 import os
@@ -24,8 +24,6 @@ from app.api import api_router
 from app.config import get_settings
 from app.core.logging import setup_logging, logger
 from app.core.database import init_db
-from app.services.clip_service import clip_service
-from app.services.search_engine import search_engine
 from app.services.cache_service import cache_service
 from app.services.llm_service import llm_service
 from app.services.chat_service import chat_service
@@ -59,32 +57,7 @@ async def lifespan(app: FastAPI):
     if cache_service.connect():
         logger.info("Redis connected - caching enabled")
     else:
-        logger.warning("Redis unavailable - caching disabled (search still works)")
-
-    # Load CLIP model
-    logger.info("Loading CLIP model...")
-    try:
-        if clip_service.load_model():
-            logger.info(f"CLIP model loaded (dim: {clip_service.embedding_dim})")
-        else:
-            logger.warning("CLIP model failed to load - search will not work")
-    except Exception as e:
-        logger.error(f"CLIP model loading error: {e}")
-
-    # Load FAISS index if exists
-    logger.info("Loading FAISS index...")
-    if os.path.exists(settings.faiss_index_path):
-        try:
-            if search_engine.load_index():
-                stats = search_engine.get_index_stats()
-                logger.info(f"FAISS index loaded: {stats['total_vectors']} vectors")
-            else:
-                logger.warning("FAISS index failed to load")
-        except Exception as e:
-            logger.error(f"FAISS index loading error: {e}")
-    else:
-        logger.info("No existing FAISS index found - creating empty index")
-        search_engine.create_index(use_hnsw=False)
+        logger.warning("Redis unavailable - caching disabled")
 
     # LangSmith tracing — env vars already loaded by load_dotenv() at module level
     if os.environ.get("LANGCHAIN_TRACING_V2", "").lower() == "true" and os.environ.get("LANGCHAIN_API_KEY"):
@@ -96,9 +69,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initialising LLM service...")
     llm_service.initialize(settings.gemini_api_key)
     if llm_service.is_enabled:
-        logger.info("LLM service ready (query expansion + re-ranking enabled)")
+        logger.info("LLM service ready (Gemini vision + chat enabled)")
     else:
-        logger.warning("LLM service disabled — search works but without AI re-ranking")
+        logger.warning("LLM service disabled — chat works but without AI features")
 
     # Initialise Chat service (LangGraph)
     chat_service.initialize()

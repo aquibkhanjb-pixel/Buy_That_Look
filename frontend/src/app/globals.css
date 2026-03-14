@@ -4,50 +4,25 @@
 
 @layer base {
   body {
-    @apply antialiased;
+    @apply antialiased bg-ivory text-noir;
   }
 }
 
-@layer components {
-  .btn-primary {
-    @apply bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700
-           transition-colors duration-200 font-medium disabled:opacity-50
-           disabled:cursor-not-allowed;
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
-
-  .btn-secondary {
-    @apply bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300
-           transition-colors duration-200 font-medium;
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
   }
-
-  .input-field {
-    @apply w-full px-4 py-2 border border-gray-300 rounded-lg
-           focus:ring-2 focus:ring-primary-500 focus:border-transparent
-           outline-none transition-all duration-200;
-  }
-
-  .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-100
-           hover:shadow-md transition-shadow duration-200;
+  .text-balance {
+    text-wrap: balance;
   }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
-}
+/* Refined thin scrollbar for chat area */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D4C9BB; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #B8A99A; }

@@ -11,13 +11,7 @@ Main graph architecture:
     │                                 ↓ (_post_extract_router)
     │                              ┌─ marketplace_search  → web_search
     │                              ├─ garment missing (1st turn) → ask_clarification
-    │                              └─ otherwise           → search_local_db
-    │                                                           ↓
-    │                                                       rerank_results
-    │                                                           ↓ (quality_router)
-    │                                                        ┌─ good     → generate_response
-    │                                                        ├─ mediocre → ask_clarification
-    │                                                        └─ poor     → web_search
+    │                              └─ otherwise           → web_search
     │
     ├── [outfit_completion]     → outfit_completion_node
     │                                 ↓ (direct edge)
@@ -69,7 +63,6 @@ except ImportError:
 
 from app.schemas.chat import FashionFeatures, SearchParams, WebSearchResult
 from app.services.llm_service import llm_service
-from app.services.search_engine import search_engine
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -85,19 +78,16 @@ class ChatState(TypedDict):
     input_type: str               # "text" | "image" | "hybrid"
     raw_query: str
     image_description: Optional[str]   # Gemini Vision output (if image provided)
-    image_bytes: Optional[bytes]       # Raw uploaded image — preserved for CLIP image search
+    image_bytes: Optional[bytes]       # Raw uploaded image — used for Google Lens visual search
 
     # Feature extraction (this turn + accumulated session)
     current_features: dict        # FashionFeatures serialized dict (this turn)
     user_preferences: dict        # Accumulated FashionFeatures across session
 
     # Search
-    search_params: dict           # SearchParams serialized dict
-    local_results: List[dict]
-    final_results: List[dict]
-    results_quality: str          # "good" | "mediocre" | "poor" | "empty"
+    search_params: dict           # SearchParams serialized dict (query string for web search)
 
-    # Web search fallback
+    # Web search
     web_search_triggered: bool
     search_queries: List[str]
     web_results: List[dict]       # List[WebSearchResult dicts]
@@ -126,9 +116,9 @@ class ChatState(TypedDict):
     last_shown_product: dict       # Full product dict of the FIRST result shown last turn (for ReAct outfit matching)
 
     # Cross-turn search context (prevents wrong-category web searches after outfit completion)
-    last_search_query: str         # The actual CLIP/search query used in the previous turn
+    last_search_query: str         # The actual search query used in the previous turn
 
-    # Sticky web-search mode: once True, all refinements go to web_search (not local DB)
+    # Sticky web-search mode: once True, kept for the session
     web_search_mode: bool          # Set when user searches a marketplace; sticks for the session
 
     # Outfit completion — waiting for user to specify what TYPE of item they want
@@ -1196,7 +1186,7 @@ def extract_fashion_features(state: ChatState) -> ChatState:
     conversation. Merges them with accumulated session preferences so that
     attributes like gender/budget persist across turns even when not mentioned.
 
-    Also builds the CLIP query string and FAISS filter dict for the search.
+    Also builds the search query string used by web_search.
     """
     last_msg = _get_last_user_message(state.get("messages", []))
     image_desc = state.get("image_description")
@@ -1290,22 +1280,19 @@ def extract_fashion_features(state: ChatState) -> ChatState:
     else:
         merged = accumulated_features.merge(current_features)
 
-    # Build CLIP query — prefer merged features
-    # For image/hybrid inputs: fall back to image_description (not the vague user message)
-    # For text inputs: fall back to expand_query on the raw user message
-    clip_query = merged.to_clip_query()
-    if not clip_query:
-        image_desc = state.get("image_description")
+    # Build query string from merged features — used by web_search for the Serper/visual search
+    # For image/hybrid inputs: use image_description as it is the product specification
+    # For text inputs: build from structured features or fall back to raw message
+    query = merged.to_clip_query()
+    if not query:
         input_type = state.get("input_type", "text")
         if image_desc and input_type in ("image", "hybrid"):
-            clip_query = image_desc   # The image description IS the product specification
-        elif llm_service.is_enabled:
-            clip_query = llm_service.expand_query(last_msg)
+            query = image_desc
         else:
-            clip_query = last_msg
+            query = last_msg
 
     search_params = SearchParams(
-        query=clip_query,
+        query=query,
         filters=merged.to_filters(),
         k=12,
     )
@@ -1314,8 +1301,8 @@ def extract_fashion_features(state: ChatState) -> ChatState:
     missing_slots = _compute_missing_slots(merged)
 
     logger.info(
-        f"Features extracted | query='{clip_query[:60]}' | "
-        f"filters={search_params.filters} | missing_slots={missing_slots}"
+        f"Features extracted | query='{query[:60]}' | "
+        f"missing_slots={missing_slots}"
     )
 
     return {
@@ -1328,286 +1315,7 @@ def extract_fashion_features(state: ChatState) -> ChatState:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Node 3 — Search Local DB
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Garment types with <20 products in the local DB — CLIP will return wrong-category results.
-# Route these directly to web search by returning empty local_results.
-_WEB_ONLY_GARMENTS: set[str] = {
-    "kurta", "kurti", "saree", "sari", "lehenga", "anarkali", "salwar",
-    "dupatta", "sherwani", "sharara", "ghagra", "churidar", "kaftan",
-    "dress", "skirt", "gown", "maxi", "bodysuit", "jumpsuit", "romper",
-    "palazzos", "palazzo",
-}
-
-
-def search_local_db(state: ChatState) -> ChatState:
-    """
-    Feature 5 — Parallel Search: runs two FAISS queries simultaneously using threads.
-      • Primary query  : Gemini-extracted structured CLIP features (precise)
-      • Secondary query: Raw user message (broader recall, different angle)
-    Results are merged and deduplicated by product ID before re-ranking.
-
-    Feature 1 — Negative Filtering: products matching disliked attributes are removed
-    from merged results (fallback: keep all if filtering removes everything).
-    """
-    params_dict = state.get("search_params", {})
-    params = SearchParams(**params_dict) if params_dict else SearchParams(query="")
-
-    if not params.query or not search_engine.is_ready():
-        logger.warning("Search engine not ready or empty query")
-        return {**state, "local_results": []}
-
-    # ── Garment coverage check ────────────────────────────────────────────────
-    # Skip local FAISS search for garment types with near-zero local inventory.
-    # Applies to both text AND image inputs — image_description sets garment_type
-    # via extract_fashion_features, so the same check catches uploaded kurta/dress/etc.
-    # quality_router routes empty local_results → web_search automatically.
-    input_type = state.get("input_type", "text")
-    garment_type = (
-        state.get("user_preferences", {}).get("garment_type") or ""
-    ).lower().strip()
-    if garment_type in _WEB_ONLY_GARMENTS:
-        logger.info(f"Garment '{garment_type}' not in local DB — skipping FAISS, routing to web search")
-        return {**state, "local_results": []}
-
-    image_bytes = state.get("image_bytes")
-
-    primary_results:   List[dict] = []
-    secondary_results: List[dict] = []
-    bing_results:      List[dict] = []
-    lens_results:      List[dict] = []
-
-    def _run_primary():
-        nonlocal primary_results
-        if input_type == "image" and image_bytes:
-            # True image-to-image CLIP search — bypasses text description entirely
-            primary_results = search_engine.search_by_image(
-                image_bytes=image_bytes,
-                k=params.k,
-                filters=params.filters if params.filters else None,
-            )
-        elif input_type == "hybrid" and image_bytes:
-            # Blend image vector (60%) + text vector (40%) for image+text queries
-            primary_results = search_engine.search_hybrid(
-                image_bytes=image_bytes,
-                query=params.query,
-                alpha=0.6,
-                k=params.k,
-                filters=params.filters if params.filters else None,
-            )
-        else:
-            # Text-only: standard CLIP text-to-image search
-            primary_results = search_engine.search_by_text(
-                query=params.query,
-                k=params.k,
-                filters=params.filters if params.filters else None,
-            )
-
-    def _run_secondary():
-        nonlocal secondary_results
-        # Secondary text pass only makes sense for text queries
-        if input_type in ("image", "hybrid"):
-            return
-        raw_query = state.get("raw_query", "").strip()
-        if raw_query and raw_query.lower() != params.query.lower():
-            secondary_results = search_engine.search_by_text(
-                query=raw_query,
-                k=8,
-                filters=None,
-            )
-
-    def _run_visual_web():
-        nonlocal bing_results
-        if input_type not in ("image", "hybrid"):
-            return
-        image_desc = state.get("image_description", "")
-        if not _serper_api_key or not image_desc:
-            return
-        # Use the condensed CLIP query as the search term; full image_description as
-        # the verification context (gives Gemini Vision the richest matching signal).
-        clip_query = (state.get("search_params") or {}).get("query", "")
-        search_query = clip_query if clip_query else image_desc.split(".")[0][:100]
-        results = _serper_react_search(search_query, context=image_desc, num=6)
-        if results:
-            logger.info(f"Visual web: {len(results)} verified products for image search")
-            bing_results = results
-
-    def _run_lens():
-        nonlocal lens_results
-        if input_type not in ("image", "hybrid") or not image_bytes:
-            return
-        lens_results = _serper_lens_search(image_bytes, num=6)
-
-    # ── All four run in parallel ──────────────────────────────────────────
-    t1 = threading.Thread(target=_run_primary,    daemon=True)
-    t2 = threading.Thread(target=_run_secondary,  daemon=True)
-    t3 = threading.Thread(target=_run_visual_web, daemon=True)
-    t4 = threading.Thread(target=_run_lens,       daemon=True)
-    t1.start(); t2.start(); t3.start(); t4.start()
-    t1.join();  t2.join()
-    t3.join(timeout=15)   # visual-web: don't block main response beyond 15 s
-    t4.join(timeout=20)   # lens: slightly longer — image upload round-trip
-
-    # ── Merge & deduplicate ───────────────────────────────────────────────
-    seen: Dict[str, dict] = {}
-    for p in primary_results + secondary_results:
-        pid = str(p.get("id", ""))
-        if pid and pid not in seen:
-            seen[pid] = p
-    merged = list(seen.values())
-
-    # ── Feature 1: Negative filtering ────────────────────────────────────
-    disliked = state.get("disliked_features", {})
-    if disliked and merged:
-        filtered = []
-        for product in merged:
-            title = (product.get("title") or "").lower()
-            desc  = (product.get("description") or "").lower()
-            text  = f"{title} {desc}"
-            skip  = False
-            for field in ("colors", "patterns", "styles", "brands", "garment_types"):
-                for val in (disliked.get(field) or []):
-                    if val.lower() in text:
-                        skip = True
-                        break
-                if skip:
-                    break
-            if not skip:
-                filtered.append(product)
-        if filtered:   # Only apply filter when it doesn't wipe everything out
-            logger.info(f"Negative filter: {len(merged)} → {len(filtered)} products")
-            merged = filtered
-
-    # ── Merge visual web + Google Lens results (deduplicate by URL) ───────
-    all_web: List[dict] = []
-    seen_urls: set = set()
-    for r in bing_results + lens_results:
-        url = r.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            all_web.append(r)
-
-    logger.info(
-        f"Parallel search | input={input_type} | primary={len(primary_results)} "
-        f"secondary={len(secondary_results)} unique={len(merged)} "
-        f"visual_web={len(bing_results)} lens={len(lens_results)}"
-    )
-    return {
-        **state,
-        "local_results":      merged,
-        # Visual web + Lens results stored as web_results so quality_router
-        # knows not to overwrite them with a text-query web_search fallback.
-        "web_results":        all_web if all_web else state.get("web_results", []),
-        "web_search_triggered": bool(all_web) or state.get("web_search_triggered", False),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Node 4 — Rerank Results
-# ─────────────────────────────────────────────────────────────────────────────
-
-def rerank_results_node(state: ChatState) -> ChatState:
-    """
-    Re-rank local results using Gemini.
-    Uses the original user message + extracted features as scoring criteria
-    (not just the expanded CLIP query) for better relevance judgment.
-
-    Skips Gemini re-ranking for image/hybrid inputs — CLIP visual similarity
-    is already the ground truth; re-ranking adds ~13 s with minimal benefit.
-    """
-    local_results = state.get("local_results", [])
-    if not local_results:
-        return {**state, "final_results": [], "results_quality": "empty"}
-
-    image_desc = state.get("image_description")
-    input_type = state.get("input_type", "text")
-
-    # ── Fast path: image uploads — trust CLIP order, skip expensive Gemini call ──
-    if image_desc and input_type in ("image", "hybrid"):
-        for r in local_results:
-            r["llm_score"] = None
-            r["match_reason"] = _build_match_reason(r, FashionFeatures(**state.get("user_preferences", {})))
-        quality = "good"
-        logger.info(f"Image input — skip re-rank, using CLIP order | {len(local_results)} results")
-        return {**state, "final_results": local_results, "results_quality": quality}
-
-    # ── Text path: re-rank top 8 only (was all 20 — reduces Gemini payload) ──
-    rerank_query = _get_last_user_message(state.get("messages", []))
-
-    # Feature 3 — Personalized Re-ranking: inject full accumulated user preferences
-    user_prefs = FashionFeatures(**state.get("user_preferences", {}))
-    pref_context = user_prefs.to_clip_query()
-    if pref_context:
-        rerank_query = f"{rerank_query} | User preferences: {pref_context}"
-
-    # Feature 1 — Negative context: tell re-ranker what to penalise
-    disliked = state.get("disliked_features", {})
-    dislikes: List[str] = []
-    for field in ("colors", "patterns", "styles"):
-        vals = disliked.get(field) or []
-        if vals:
-            dislikes.append(f"avoid {field}: {', '.join(vals)}")
-    if dislikes:
-        rerank_query = f"{rerank_query} | AVOID: {'; '.join(dislikes)}"
-
-    final = llm_service.rerank_results(rerank_query, local_results[:8])  # top-8 reduces Gemini payload ~60%
-
-    # Feature 6 — Result Explanation: add match_reason to every product (rule-based, free)
-    for r in final:
-        r["match_reason"] = _build_match_reason(r, user_prefs)
-
-    all_scores_null = all(r.get("llm_score") is None for r in final)
-    best_score = max(
-        (r.get("llm_score") or 0 for r in final),
-        default=0,
-    )
-
-    if all_scores_null and final:
-        # Gemini scoring unavailable (quota exhausted, etc.) — show CLIP results directly
-        # rather than routing to web search. CLIP similarity is a good enough proxy.
-        quality = "good"
-    elif best_score >= 6:
-        quality = "good"
-    elif best_score >= 3:
-        quality = "mediocre"
-    elif final:
-        quality = "poor"
-    else:
-        quality = "empty"
-
-    logger.info(
-        f"Rerank complete | quality={quality} | best_score={best_score} "
-        f"| gemini_scored={not all_scores_null}"
-    )
-    return {**state, "final_results": final, "results_quality": quality}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Conditional Edge — Quality Router
-# ─────────────────────────────────────────────────────────────────────────────
-
-def quality_router(state: ChatState) -> str:
-    quality = state.get("results_quality", "empty")
-    input_type = state.get("input_type", "text")
-
-    if quality == "good":
-        return "generate_response"
-    elif quality == "mediocre":
-        # Image speaks for itself — show what we found, don't ask for more info
-        if input_type in ("image", "hybrid"):
-            return "generate_response"
-        return "clarification_check"
-    else:
-        # Visual web results (from _run_visual_web) already present — don't overwrite
-        # with a text-query web_search (which would replace visual matches with link cards).
-        if state.get("web_results"):
-            return "generate_response"
-        return "web_search"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Node 5 — Ask Clarification
+# Node 3 — Ask Clarification
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ask_clarification(state: ChatState) -> ChatState:
@@ -1743,7 +1451,7 @@ def outfit_completion_node(state: ChatState) -> ChatState:
         Invokes the ReAct outfit subgraph (max 5 iterations):
           extract_attributes → generate_query → web_search → evaluate
           → (loop if poor, up to 5×) → format_response
-        The subgraph searches ONLINE DIRECTLY (no local FAISS — not enough products).
+        The subgraph searches ONLINE DIRECTLY via Serper web search.
         Sets response + web_results directly so graph routes straight to update_memory.
     """
     user_msg    = _get_last_user_message(state.get("messages", []))
@@ -1855,7 +1563,6 @@ def outfit_completion_node(state: ChatState) -> ChatState:
         "web_results":           outfit_result.get("outfit_web_results", []),
         "web_search_triggered":  True,
         "products_to_show":      [],
-        "final_results":         [],
         "intent":                "outfit_completion",
         "last_search_query":     outfit_result.get("current_query", ""),
     }
@@ -2307,12 +2014,66 @@ def web_search(state: ChatState) -> ChatState:
     encoded = urllib.parse.quote_plus(raw_q)
     short_q = raw_q[:55]
 
-    # Serper.dev — ReAct verified Google Shopping results with images and prices
-    # context = base_query (the structured fashion description) for Vision verification
-    serper_results = _serper_react_search(raw_q, context=base_query, max_iter=2)
-    if serper_results:
-        web_results = serper_results
-        logger.info(f"Serper ReAct results | query='{raw_q[:60]}' | {len(web_results)} verified products")
+    input_type  = state.get("input_type", "text")
+    image_bytes = state.get("image_bytes")
+    image_desc  = state.get("image_description", "")
+
+    # ── Parallel visual search threads (image inputs only) ───────────────
+    visual_web_results: List[dict] = []
+    lens_results:       List[dict] = []
+
+    def _run_visual_web():
+        nonlocal visual_web_results
+        if input_type not in ("image", "hybrid"):
+            return
+        if not _serper_api_key or not image_desc:
+            return
+        # Use the condensed query as the search term; full image_description as
+        # the verification context (gives Gemini Vision the richest matching signal).
+        clip_query = (state.get("search_params") or {}).get("query", "")
+        search_query = clip_query if clip_query else image_desc.split(".")[0][:100]
+        results = _serper_react_search(search_query, context=image_desc, num=6)
+        if results:
+            logger.info(f"Visual web: {len(results)} verified products for image search")
+            visual_web_results.extend(results)
+
+    def _run_lens():
+        nonlocal lens_results
+        if input_type not in ("image", "hybrid") or not image_bytes:
+            return
+        lens_results.extend(_serper_lens_search(image_bytes, num=6))
+
+    # ── Text search + visual threads run in parallel ─────────────────────
+    serper_results: List[dict] = []
+
+    def _run_text_serper():
+        nonlocal serper_results
+        results = _serper_react_search(raw_q, context=base_query, max_iter=2)
+        serper_results.extend(results)
+
+    t_text = threading.Thread(target=_run_text_serper,  daemon=True)
+    t_vis  = threading.Thread(target=_run_visual_web,   daemon=True)
+    t_lens = threading.Thread(target=_run_lens,         daemon=True)
+    t_text.start(); t_vis.start(); t_lens.start()
+    t_text.join(timeout=20)
+    t_vis.join(timeout=15)
+    t_lens.join(timeout=20)
+
+    # ── Merge visual web + Lens + text Serper results (deduplicate by URL) ──
+    seen_urls: set = set()
+    web_results: List[dict] = []
+    for r in visual_web_results + lens_results + serper_results:
+        url = r.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            web_results.append(r)
+
+    if web_results:
+        logger.info(
+            f"Serper results | query='{raw_q[:60]}' | text={len(serper_results)} "
+            f"visual_web={len(visual_web_results)} lens={len(lens_results)} "
+            f"merged={len(web_results)}"
+        )
     else:
         # Fallback: direct e-commerce search links (no API key or Serper failed)
         # Platform URL templates (all verified search endpoints)
@@ -2353,14 +2114,10 @@ def web_search(state: ChatState) -> ChatState:
     return {
         **state,
         "web_search_triggered": True,
-        # Only lock the session into web-search mode when the user EXPLICITLY chose a
-        # marketplace ("show me on Myntra"). System-initiated fallbacks (poor FAISS quality)
-        # must NOT set this — otherwise a single bad local-search result would break all
-        # future image uploads by routing them to Serper instead of CLIP.
         "web_search_mode":      state.get("web_search_mode", False) or (state.get("intent") == "marketplace_search"),
         "search_queries":       search_queries,
         "web_results":          web_results,
-        "final_results":        [],
+        "products_to_show":     [],
     }
 
 
@@ -2428,51 +2185,35 @@ def generate_response(state: ChatState) -> ChatState:
     apologetic for no results, conversational for general intent.
     """
     intent = state.get("intent", "new_search")
-    final_results = state.get("final_results", [])
     web_results = state.get("web_results", [])
     web_triggered = state.get("web_search_triggered", False)
+    products_to_show = state.get("products_to_show", [])
     history = _format_history(state.get("messages", []))
 
     # ── Graceful degradation when Gemini API is down ──
     gemini_unavailable = time.time() < _rate_limited_until
     if gemini_unavailable and not web_triggered:
-        if final_results:
-            reply = (
-                "My AI service is temporarily unavailable, but I found some visually similar products "
-                "using image search. Results may not be perfectly curated — please try again in a moment!"
-            )
-        else:
-            reply = (
-                "My AI service is temporarily unavailable (high demand or quota limit). "
-                "Please try again in a minute. If the problem persists, the daily quota may be exhausted."
-            )
-        products_to_show = final_results[:6] if final_results else []
+        reply = (
+            "My AI service is temporarily unavailable (high demand or quota limit). "
+            "Please try again in a minute. If the problem persists, the daily quota may be exhausted."
+        )
         return {**state, "response": reply, "products_to_show": products_to_show}
 
     # Build context for Gemini
-    if final_results:
-        top = [r for r in final_results if (r.get("llm_score") or 0) >= 6][:6]
-        product_summary = "\n".join(
-            f"- {p.get('title', 'Unknown')} ({'₹' + str(int(p.get('price', 0))) if p.get('price') else 'price N/A'})"
-            for p in (top or final_results[:3])
-        )
-        result_context = f"Found {len(top or final_results[:3])} relevant products:\n{product_summary}"
-    elif web_triggered and web_results:
-        result_context = f"No local results found. Searched online and found {len(web_results)} links."
+    if web_triggered and web_results:
+        result_context = f"Searched online and found {len(web_results)} links/products."
     else:
-        result_context = "No products found in the database or online."
+        result_context = "No products found online."
 
     if not llm_service.is_enabled:
         # Simple fallback without Gemini
-        if final_results:
-            response = f"I found {len(final_results)} items for you!"
-        elif web_triggered:
-            response = "I couldn't find it locally, but here are some links to search online."
+        if web_triggered:
+            response = "Here are some links to search for this item online."
         elif intent == "general":
             response = "How can I help you find the perfect fashion item?"
         else:
             response = "I couldn't find matching products. Try describing the style or occasion."
-        return {**state, "response": response, "products_to_show": final_results[:6]}
+        return {**state, "response": response, "products_to_show": products_to_show}
 
     tone_guide = {
         "new_search": "excited and helpful",
@@ -2501,28 +2242,22 @@ def generate_response(state: ChatState) -> ChatState:
     reply = _gemini_call(prompt, model=_CHAT_MODEL, disable_thinking=False)  # thinking on for richer reply
     if not reply:
         reply = (
-            f"I found {len(final_results)} items for you!" if final_results
-            else "Here are some online links where you can search for this item."
+            "Here are some online links where you can search for this item."
             if web_triggered else "I couldn't find a match. Try describing the style or occasion differently."
         )
 
     # ── Append feature suggestion when products are shown ──
     # Only suggest when there's something to show AND this was a search intent
-    if (final_results or web_triggered) and intent in ("new_search", "refine", "marketplace_search"):
+    if web_triggered and intent in ("new_search", "refine", "marketplace_search"):
         current_prefs = FashionFeatures(**state.get("user_preferences", {}))
         suggestion = _build_feature_suggestion(current_prefs)
         if suggestion:
             reply = f"{reply}\n\n{suggestion}"
 
-    # Products to show: top-scored local results (score >= 6), or all if no LLM
-    products_to_show = [r for r in final_results if (r.get("llm_score") or 0) >= 6]
-    if not products_to_show and final_results:
-        products_to_show = final_results[:6]
-
     return {
         **state,
         "response": reply,
-        "products_to_show": products_to_show[:6],
+        "products_to_show": products_to_show,
     }
 
 
@@ -2548,9 +2283,9 @@ def update_memory(state: ChatState) -> ChatState:
     if len(messages) > MAX_MESSAGES:
         messages = messages[-MAX_MESSAGES:]
 
-    # Reset clarification count on successful search
+    # Reset clarification count on successful web search
     new_clarification_count = state.get("clarification_count", 0)
-    if state.get("results_quality") == "good":
+    if state.get("web_search_triggered"):
         new_clarification_count = 0
 
     return {
@@ -2562,9 +2297,6 @@ def update_memory(state: ChatState) -> ChatState:
         # products_to_show, response) — they are read by ChatService.invoke()
         # after the graph finishes. All per-turn fields are already reset via
         # initial_state at the start of each new invoke() call.
-        "local_results": [],
-        "final_results": [],
-        "results_quality": "",
     }
 
 
@@ -2579,8 +2311,6 @@ def _build_graph():
     graph.add_node("classify_intent",           classify_intent)
     graph.add_node("extract_fashion_features",  extract_fashion_features)
     graph.add_node("outfit_completion_node",    outfit_completion_node)
-    graph.add_node("search_local_db",           search_local_db)
-    graph.add_node("rerank_results",            rerank_results_node)
     graph.add_node("ask_clarification",         ask_clarification)
     graph.add_node("handle_feedback",           handle_feedback_node)
     graph.add_node("web_search",                web_search)
@@ -2619,15 +2349,11 @@ def _build_graph():
     graph.add_edge("outfit_completion_node", "update_memory")
 
     # Feature extraction → conditional routing:
-    # - marketplace_search  : skip local DB → go straight to web_search
+    # - marketplace_search  : go straight to web_search
     # - new_search + garment_type missing + first turn (count=0) → ask clarification FIRST
-    # - everything else     : run local DB search
+    # - everything else     : web_search (local DB removed)
     def _post_extract_router(s: ChatState) -> str:
         if s["intent"] == "marketplace_search":
-            return "web_search"
-        # Sticky: once user has switched to online shopping, keep text refinements online.
-        # Image uploads are EXCLUDED — they must always go through CLIP visual similarity search.
-        if s.get("web_search_mode", False) and s.get("input_type", "text") not in ("image", "hybrid"):
             return "web_search"
         if (
             s["intent"] == "new_search"
@@ -2636,27 +2362,14 @@ def _build_graph():
             and s.get("input_type", "text") not in ("image", "hybrid")  # image speaks for itself
         ):
             return "ask_clarification"
-        return "search_local_db"
+        return "web_search"
 
     graph.add_conditional_edges(
         "extract_fashion_features",
         _post_extract_router,
         {
-            "web_search":       "web_search",
+            "web_search":        "web_search",
             "ask_clarification": "ask_clarification",
-            "search_local_db":  "search_local_db",
-        },
-    )
-    graph.add_edge("search_local_db", "rerank_results")
-
-    # Quality routing after rerank
-    graph.add_conditional_edges(
-        "rerank_results",
-        quality_router,
-        {
-            "generate_response": "generate_response",
-            "clarification_check": "ask_clarification",   # renamed for simplicity
-            "web_search": "web_search",
         },
     )
 
@@ -2759,9 +2472,6 @@ class ChatService:
             "current_features":    {},
             "user_preferences":    accumulated_prefs,
             "search_params":       {},
-            "local_results":       [],
-            "final_results":       [],
-            "results_quality":     "",
             "web_search_triggered": False,
             "search_queries":      [],
             "web_results":         [],
@@ -2858,13 +2568,9 @@ def _simple_fallback(state: ChatState) -> ChatState:
         state = web_search(state)
     elif intent in ("new_search", "refine"):
         state = extract_fashion_features(state)
-        # Sticky web-search mode — user already switched to online shopping.
-        # Image uploads are excluded (they always use CLIP, not Serper).
-        if state.get("web_search_mode", False) and state.get("input_type", "text") not in ("image", "hybrid"):
-            state = web_search(state)
         # Proactive slot gate — ask before searching if garment_type is unknown
         # Skip for image/hybrid inputs: the uploaded image already defines the product
-        elif (
+        if (
             intent == "new_search"
             and "garment_type" in state.get("missing_slots", [])
             and state.get("clarification_count", 0) == 0
@@ -2872,15 +2578,13 @@ def _simple_fallback(state: ChatState) -> ChatState:
         ):
             state = ask_clarification(state)
         else:
-            state = search_local_db(state)
-            state = rerank_results_node(state)
+            state = web_search(state)
     elif "feedback" in intent:
         state = handle_feedback_node(state)
         action = state.get("feedback_action", "")
         if action == "wants_refinement":
             state = extract_fashion_features(state)
-            state = search_local_db(state)
-            state = rerank_results_node(state)
+            state = web_search(state)
         elif action in ("wants_different", "very_unsatisfied"):
             state = web_search(state)
     state = generate_response(state)

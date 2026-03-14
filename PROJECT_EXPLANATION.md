@@ -2,122 +2,171 @@
 
 ## Problem Statement
 
-Online fashion shopping is overwhelming. A user might see a jacket on the street, at a party, or on social media and think — "I want something like that." But how do they find it online? They would have to manually browse through thousands of products on different e-commerce websites, trying various keywords, hoping something similar shows up. This is frustrating, time-consuming, and often leads to the user giving up.
+Online fashion shopping is overwhelming. A user might see an outfit on Instagram, at a party, or on the street and think — "I want something like that." But finding it online requires manually browsing thousands of products across different e-commerce sites. Traditional keyword search fails when you have a visual idea but no words for it.
 
-Traditional text-based search on e-commerce platforms also has limitations. If a user types "blue floral summer dress," the search engine relies on product titles and tags. If a seller didn't tag their product correctly, it won't appear — even if it's a perfect match visually.
+Even when users can describe what they want, real conversations don't look like search queries. "Something boho for a Goa trip, not too expensive, nothing floral" — a keyword engine can't process that. It needs a fashion brain.
 
-**The core problem**: There is no easy way for a user to search for fashion products using the way they naturally think — by what something *looks like*, not just what it's called.
+**The core problem**: There is no easy way to shop for fashion the way people naturally think — conversationally, visually, and contextually.
 
 ---
 
 ## How Our System Solves It
 
-We built a **multi-modal fashion search engine** that lets users find fashion products in three ways:
+We built an **AI-powered fashion stylist** with four main capabilities:
 
-1. **Image Search** — Upload a photo of any outfit or fashion item, and the system finds visually similar products from real e-commerce stores.
-2. **Text Search** — Describe what you're looking for in plain language (e.g., "black leather handbag"), and the system understands the visual concept behind those words.
-3. **Hybrid Search** — Combine both. Upload a photo and add a description like "this dress but in red." The system blends both inputs to find exactly what the user wants.
+1. **Conversational Search** — Chat naturally with an AI assistant. It understands intent, extracts structured fashion attributes, searches the web for real products, and remembers your preferences across the conversation.
+2. **Image-Based Discovery** — Upload any outfit photo and the system uses Google Lens to find visually identical or similar products from live e-commerce sites.
+3. **Outfit Completion** — Ask "what goes with this?" and a ReAct reasoning agent searches for complementary items, coordinating colour palettes and styles.
+4. **Trend Intelligence** — A Trend Analyzer fetches real fashion news from the web and uses Gemini to extract the top 6 current trends with direct "explore" buttons.
 
-Every result links directly to the actual product page on the e-commerce site, with real prices in INR, so the user can click and buy immediately.
+Bonus: **Virtual Try-On** — Try any product on your own photo using a diffusion model running on HuggingFace.
 
 ---
 
 ## System Architecture Overview
 
-The system has four main components:
-
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────>│   Backend    │────>│  PostgreSQL   │     │   Scraper    │
-│  (Next.js)   │<────│  (FastAPI)   │────>│   Database    │<────│  (Scrapy)    │
-│              │     │              │────>│              │     │              │
-│  React UI    │     │  CLIP Model  │     │  Products    │     │  Ajio.com    │
-│  Tailwind    │     │  FAISS Index │     │  Embeddings  │     │  Flipkart    │
-│              │     │  Redis Cache │     │  Search Logs │     │  Myntra      │
-└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
-     :3000                :8000                :5432
+┌──────────────────────────────────────────────────────────────┐
+│                    Frontend (Next.js 14)                      │
+│  Trend Cards  │  AI Chat Assistant  │  Virtual Try-On Modal  │
+└────────────────────────┬─────────────────────────────────────┘
+                         │ REST API
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  Backend (FastAPI / Python)                   │
+│                                                              │
+│  LangGraph StateGraph ──► Google Gemini (gemini-flash-lite)  │
+│  Serper.dev  ──► Product search + Google Lens + News         │
+│  HuggingFace ──► IDM-VTON diffusion model (try-on)          │
+└──────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+              PostgreSQL + Redis (cache) + catbox.moe (image hosting)
 ```
 
 ---
 
 ## Detailed Workflow
 
-### Step 1: Data Collection (Scraper)
+### Step 1: User Sends a Message
 
-Before users can search, we need products in our database. We built web scrapers using **Scrapy** that collect real fashion products from Indian e-commerce sites like **Ajio**, **Flipkart**, **Myntra**, and **Amazon India**.
+The user types in the chat. They may also attach an image. The message hits `POST /api/v1/chat/` as multipart/form-data.
 
-For each product, the scraper collects:
-- Product title, brand, description
-- Price in INR (with original price if discounted)
-- Product image URL (from the site's CDN)
-- Direct product page URL (so users can click and buy)
-- Category (Men > Shirts, Women > Dresses, Accessories > Bags, etc.)
+### Step 2: LangGraph Routes the Request
 
-The scraped data goes through a **cleaning pipeline** that:
-- Standardizes category names across different sites
-- Normalizes prices and currency formats
-- Removes duplicates
-- Validates required fields
+The backend runs a **LangGraph StateGraph** — a directed graph of AI nodes with conditional routing. Every message flows through this graph:
 
-Finally, a **database pipeline** stores everything in PostgreSQL.
+```
+classify_intent
+    │
+    ├─ new_search / refine / marketplace ──► extract_fashion_features ──► web_search
+    ├─ outfit_completion ──────────────────► outfit_completion_node (ReAct subgraph)
+    ├─ feedback ───────────────────────────► handle_feedback
+    └─ general ────────────────────────────► generate_response
+```
 
-Currently, we have **1500+ real products** across 16 categories including clothing, footwear, bags, watches, sunglasses, and ethnic wear.
+LangGraph makes the pipeline **auditable and debuggable** — each node is a pure function, routing is explicit, and state is typed with Pydantic.
 
-### Step 2: Generating Embeddings (CLIP + FAISS)
+### Step 3: Intent Classification
 
-This is the core ML part. We use OpenAI's **CLIP (Contrastive Language-Image Pretraining)** model — specifically the `ViT-B/32` variant — to convert product images into numerical representations called **embeddings**.
+`classify_intent` — Gemini reads the user message + last 10 turns of conversation and returns one of:
 
-**What is CLIP?**
-CLIP was trained on 400 million image-text pairs from the internet. It learned to understand the relationship between images and text. It maps both images and text into the same 512-dimensional vector space. So if you have an image of a red dress and the text "red dress," both will map to nearby points in this space.
+| Intent | Example |
+|--------|---------|
+| `new_search` | "Show me blue cotton kurtas for men" |
+| `refine` | "In red instead, under ₹1500" |
+| `marketplace_search` | "Find these on Flipkart" |
+| `outfit_completion` | "What can I pair this with?" |
+| `feedback_positive` | "Love it!" |
+| `feedback_negative` | "Not what I wanted, show something else" |
+| `general` | "Hi, what can you help with?" |
 
-**How we use it:**
-1. For each product in our database, we download its image from the e-commerce site's CDN.
-2. We pass the image through CLIP's image encoder, which outputs a 512-dimensional vector (the embedding).
-3. We normalize this vector (L2 normalization) so that cosine similarity equals dot product.
-4. We store all embeddings in a **FAISS index** (Facebook AI Similarity Search).
+If Gemini is unavailable, a **keyword fallback** takes over instantly — no crashes.
 
-**Why FAISS?**
-FAISS is a library for efficient similarity search. Instead of comparing a query against every product one by one (which would be slow), FAISS uses optimized data structures to find the most similar vectors in milliseconds, even with millions of products.
+### Step 4: Feature Extraction
 
-We use `IndexFlatIP` (Inner Product) for exact search on our current catalog. For larger catalogs (100k+ products), the system can switch to `IndexHNSWFlat` for approximate but faster search.
+`extract_fashion_features` — Gemini reads the conversation and extracts a structured `FashionFeatures` object:
 
-### Step 3: User Searches (The Three Modes)
+**User says:** "I need something for my cousin's sangeet, not too expensive, boho vibe"
 
-#### Image Search
-1. User uploads a photo (JPEG, PNG, or WebP).
-2. The backend passes the image through CLIP's image encoder → 512-dim embedding.
-3. This embedding is compared against all product embeddings in FAISS using cosine similarity.
-4. Products with similarity above 85% are returned, ranked by similarity score.
-5. The frontend displays the results with product images, prices, and direct buy links.
+**Gemini extracts:**
+```json
+{
+  "garment_type": "dress",
+  "style": "boho",
+  "occasion": "wedding",
+  "max_price": 2000,
+  "gender": "women"
+}
+```
 
-**Why 85% threshold?** Since both the query and the indexed products are in the same visual space (image-to-image), the similarity scores are naturally high. Setting 85% ensures only truly visually similar products are shown.
+This structured representation is **much better** than passing raw conversational text to a search engine. Features persist across turns — if you said "women's" in turn 1, you don't repeat it in turn 5.
 
-#### Text Search
-1. User types a description like "black leather handbag."
-2. The backend passes the text through CLIP's text encoder → 512-dim embedding.
-3. This text embedding is compared against the image embeddings in FAISS.
-4. Products with raw similarity above 18% are returned (CLIP cross-modal scores are lower than image-to-image).
-5. The raw scores are **normalized** to a user-friendly display range (55%–95%) since text-to-image matching in CLIP inherently produces lower numbers than image-to-image.
+**Category switch detection:** If you go from searching kurtas to rings, product-specific attributes reset. Only gender and budget carry over.
 
-**Why normalization?** CLIP's text-to-image similarity typically ranges from 0.18 to 0.38. Showing "32% match" to a user would feel wrong even though it's actually a great match. We linearly scale these to a range that makes sense to the user.
+### Step 5: Web Search (The Only Search)
 
-#### Hybrid Search
-1. User uploads a photo AND types a description (e.g., photo of a blue jacket + "but in black").
-2. Both are encoded separately through CLIP.
-3. The embeddings are combined: `hybrid = alpha × image_embedding + (1-alpha) × text_embedding`
-4. The `alpha` parameter (0 to 1) controls the weight — the user can slide between "more like the image" and "more like the text."
-5. The hybrid embedding is searched against FAISS and results are normalized for display.
+`web_search` runs **three parallel threads**:
 
-### Step 4: Result Delivery
+1. **Serper text search** — Structured query (e.g., "women boho wedding dress under ₹2000") sent to Serper Shopping API. Gemini Vision verifies product thumbnails match the intent.
+2. **Visual web search** (if image uploaded) — Uses Gemini Vision's description of the image as a Serper text query. Verifies results visually.
+3. **Google Lens** (if image uploaded) — Uploads image to catbox.moe for a public URL → Serper `/lens` endpoint → returns visually identical products from across the web.
 
-Search results are returned to the frontend as JSON containing:
-- Product title, brand, category
-- Price in INR (with original price for discounts)
-- Product image URL (loaded directly from the e-commerce CDN)
-- **Direct product URL** — clicking takes the user to the actual product page to buy
-- Similarity percentage
+All three results merge and deduplicate by URL. If all fail, direct search links to Myntra → Ajio → Amazon → Flipkart → Meesho are provided.
 
-The frontend displays these in a responsive grid with match percentages shown as badges.
+### Step 6: Response Generation
+
+`generate_response` — Gemini writes a warm, conversational reply explaining the results. It also appends a smart feature suggestion ("💡 Try specifying: sleeve length or occasion") using a rule-based system — no extra API call.
+
+### Step 7: Memory Update
+
+`update_memory` — Trims conversation to 10 turns. Session memory (gender, budget, style preferences, last shown product) persists across the conversation.
+
+---
+
+## Outfit Completion — ReAct Agent
+
+When the user asks "what goes with this?", a **5-node ReAct subgraph** runs:
+
+1. Extract attributes from the reference product (colour, style, occasion)
+2. A "fashion stylist" Gemini call determines the ideal complement, colour palette, and search queries
+3. Search Serper for complementary items
+4. Gemini evaluates: do these items actually match the style and colour palette?
+5. If poor match → refine query and try again (up to 5 iterations)
+6. Format final response
+
+This is **Retrieval-Augmented Generation + Tool Use + Reasoning** in one subgraph.
+
+---
+
+## Trend Analyzer
+
+```
+Serper /news ("fashion trends India 2026")
+    ↓ (live web results)
+Gemini extracts 6 structured TrendItem objects
+    {name, description, category, badge, search_query, example_items}
+    ↓
+1-hour in-memory cache
+    ↓
+Rendered as horizontal scroll of 6 cards
+    ↓
+"Explore trend →" fires the search_query directly into the chat assistant
+```
+
+---
+
+## Virtual Try-On
+
+```
+User photo + garment image
+    ↓
+POST /api/v1/tryon/
+    ↓
+gradio_client → yisol/IDM-VTON (HuggingFace diffusion model)
+    ↓ (~40 seconds)
+Side-by-side before/after result shown in modal
+```
 
 ---
 
@@ -125,114 +174,70 @@ The frontend displays these in a responsive grid with match percentages shown as
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| **Frontend** | Next.js 14, React, Tailwind CSS | Fast SSR, component-based UI, utility-first styling |
-| **Backend** | FastAPI (Python) | Async support, automatic API docs, Pydantic validation |
-| **ML Model** | CLIP ViT-B/32 (OpenAI) | Multi-modal (understands both images and text in same space) |
-| **Vector Search** | FAISS (Facebook) | Millisecond similarity search over thousands of vectors |
-| **Database** | PostgreSQL | Reliable relational DB for product metadata |
-| **Cache** | Redis | Caches search results and text embeddings for faster repeated queries |
-| **Scraper** | Scrapy + Playwright | Scrapy for structured crawling, Playwright for JS-rendered sites |
-| **Deployment** | Docker Compose | 5 containerized services (frontend, backend, postgres, redis, scraper) |
+| **Frontend** | Next.js 14, TypeScript, Tailwind CSS | SSR, strong typing, utility-first styling |
+| **UI Design** | Cormorant Garamond + DM Sans, ivory/noir/gold palette | Editorial fashion aesthetic |
+| **Backend** | FastAPI (Python 3.10) | Async, Pydantic validation, automatic Swagger docs |
+| **AI Orchestration** | LangGraph (StateGraph) | Explicit, auditable routing between AI nodes |
+| **Language Model** | Google Gemini (gemini-flash-lite-latest) | Intent, feature extraction, vision, response generation |
+| **Product Search** | Serper.dev (Shopping + Lens + News) | Real-time web search without scraping infrastructure |
+| **Virtual Try-On** | yisol/IDM-VTON (HuggingFace) | Diffusion-based garment fitting |
+| **Database** | PostgreSQL + SQLAlchemy | Product metadata storage |
+| **Cache** | Redis | Result caching |
 
 ---
 
 ## Key Design Decisions
 
-### 1. Image Embeddings Only (No Mixed Embeddings)
-We store only image embeddings in the FAISS index. Early experiments showed that mixing text and image embeddings in the same index causes text-embedded products to dominate all text searches — because text-to-text similarity (0.6–0.9) is much higher than text-to-image similarity (0.2–0.35). Keeping the index pure image-only and handling text search through CLIP's cross-modal capability gives consistent results.
+### 1. No Local Product Database for Search
+We removed FAISS vector search and CLIP embeddings entirely. Instead, all product discovery goes through Serper.dev (web search + Google Lens). Benefits:
+- Products are always fresh — no stale database
+- No embedding pipeline to maintain
+- Google Lens finds products that no keyword query would surface
+- System works for any garment type worldwide
 
-### 2. Per-Mode Similarity Thresholds
-Different search modes need different thresholds because CLIP produces different score ranges:
-- **Image search**: 85% — same visual space, high scores
-- **Hybrid search**: 35% raw (displayed as 60–100%) — blended embedding
-- **Text search**: 18% raw (displayed as 55–95%) — cross-modal gap
+### 2. LangGraph Over Custom Routing Code
+The pipeline has 8+ nodes with complex conditional routing. LangGraph makes each node a pure function and routing a first-class concern — easy to add new nodes, trace execution, and debug failures.
 
-### 3. Score Normalization for Display
-Raw CLIP scores are mathematically correct but confusing for users. A text search score of 0.31 is actually excellent, but showing "31% match" would make users think the result is bad. We normalize each mode's scores to intuitive percentage ranges.
+### 3. Parallel Search Threads
+Text search + visual web + Google Lens all run concurrently inside `web_search`. Total latency is the slowest thread (~3–5s), not the sum of all three (~10s+).
 
-### 4. Listing-Page-Only Scraping
-We scrape search/listing pages only (not individual product pages). One listing page gives 40–50 products worth of data. This means fewer requests, lower risk of getting blocked, and faster data collection. The product URLs still link to the real product pages.
+### 4. Resilience by Design
+- **Circuit breaker**: 60s cooldown for Gemini 429 quota; 30s for 503 errors
+- **Keyword fallback**: intent classification still works without Gemini
+- **Graceful degradation**: Serper runs independently; users always get search links even if AI fails
 
-### 5. Singleton Pattern for ML Services
-Both the CLIP service and FAISS search engine use the singleton pattern. The CLIP model takes ~3 seconds to load and uses ~700MB of memory. Loading it once and sharing across all requests is essential for performance.
-
----
-
-## Database Schema
-
-```
-products                    embeddings               search_logs
-├── id (UUID, PK)          ├── id (INT, PK)         ├── id (INT, PK)
-├── product_id (unique)    ├── product_id (FK)      ├── query_type
-├── source_site            ├── embedding_type       ├── query_text
-├── title                  ├── model_version        ├── query_image_hash
-├── description            ├── vector_index         ├── filters_applied
-├── brand                  └── created_at           ├── results_count
-├── price                                           ├── top_result_ids
-├── original_price         categories               ├── latency_ms
-├── currency               ├── id (INT, PK)         └── created_at
-├── category               ├── name
-├── color                  ├── parent_id (FK)
-├── image_url              ├── level
-├── product_url            └── path
-├── is_active
-└── created_at
-```
+### 5. Session Memory Without a Database
+FashionFeatures accumulate across turns in server-side session state. `merge()` never overwrites with None — critical for multi-turn refinement without re-stating preferences every message.
 
 ---
 
 ## API Endpoints
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `POST /api/v1/search/image` | POST | Search by uploaded image |
-| `POST /api/v1/search/text` | POST | Search by text description |
-| `POST /api/v1/search/hybrid` | POST | Combined image + text search |
-| `GET /api/v1/products/` | GET | List products with filters & pagination |
-| `GET /api/v1/products/{id}` | GET | Get single product details |
-| `GET /api/v1/products/{id}/similar` | GET | Find similar products |
-| `GET /api/v1/search/stats` | GET | Search engine & cache statistics |
-| `GET /api/v1/health` | GET | Health check |
-
-All search endpoints are **rate-limited** (10 requests/minute for image/hybrid, 30 for text) using SlowAPI.
-
----
-
-## Performance Characteristics
-
-- **Search latency**: ~50–100ms for a fresh search (CLIP encoding + FAISS search)
-- **Cached search**: ~2ms (Redis-cached results)
-- **Index size**: 1542 products × 512 dimensions × 4 bytes = ~3MB
-- **CLIP model**: ~340MB on disk, ~700MB in memory
-- **Scraping speed**: ~45 products per API call, 500+ products per minute
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/v1/chat/` | Main chat (multipart, supports image) |
+| `GET /api/v1/trends/` | 6 current fashion trends (1hr cache) |
+| `POST /api/v1/tryon/` | Virtual try-on |
+| `GET /api/v1/health` | Health check |
 
 ---
 
 ## Challenges Faced & How I Solved Them
 
-### 1. Cross-Modal Similarity Gap
-CLIP's text-to-image similarity scores (0.18–0.38) are much lower than image-to-image (0.70–0.95). A single threshold doesn't work for both. **Solution**: Separate thresholds per search mode with display-score normalization.
+### 1. Google Lens Requires a Public URL
+Serper's `/lens` endpoint does not accept base64 — it needs a public HTTPS image URL. **Solution**: Upload images to catbox.moe (free, no authentication) to get a public URL before calling Serper.
 
-### 2. Text Embedding Contamination
-When some products had text embeddings (because their images failed to download) mixed with image embeddings in FAISS, those few products dominated every text search. **Solution**: Use image-only embeddings in the index. Skip products without downloadable images.
+### 2. Google Lens Results Had Wrong Key
+Initial integration returned empty results. The Serper Lens response uses the `"organic"` key, not `"visual_matches"`. **Fix**: `data.get("organic") or data.get("visual_matches") or []`.
 
-### 3. Anti-Bot Protection on E-Commerce Sites
-Myntra blocked with HTTP2 protocol errors, Flipkart returned 403s. **Solution**: Used Ajio's search API (returns JSON directly), added Playwright for JS-rendered sites, implemented respectful rate limiting and retry logic.
+### 3. Gemini Quota Causing Incorrect Routing
+When Gemini was unavailable, all intents defaulted to `new_search`, causing stale attributes to be used. **Fix**: Keyword-based intent fallback that correctly handles "not from Flipkart" → `feedback_negative`, etc.
 
-### 4. Stale Cache After Index Rebuild
-After rebuilding the FAISS index, Redis still served old cached search results. **Solution**: Flush Redis cache after every index rebuild. Simplified the text search endpoint to always use `search_by_text()` instead of having separate cached/uncached code paths.
+### 4. Category Switch with Stale Attributes
+After searching shirts (blue/casual), asking for rings used all shirt attributes in the ring query. **Fix**: Detect garment_type change → reset product-specific attributes, keep gender + budget.
 
----
+### 5. Platform Detection Treated as Brand Filter
+"From Flipkart" → Gemini extracted `brand: "flipkart"` → 0 results. **Fix**: `_MARKETPLACES` blocklist in feature extraction prompt; platforms stripped from brand field.
 
-## Future Improvements
-
-1. **More e-commerce sources** — Add working scrapers for Myntra, Amazon India with proxy rotation
-2. **Dual-index strategy** — Separate FAISS indices for image and text embeddings to improve text search accuracy
-3. **User feedback loop** — Use click-through data from search_logs to fine-tune ranking
-4. **Personalized recommendations** — Track user preferences and adjust results
-5. **Real-time price updates** — Periodic re-scraping to keep prices current
-6. **GPU acceleration** — Move CLIP inference to GPU for 10x faster encoding
-
-
-fashionscraperenv for frontend
-fashion_scraper for backend
+### 6. Virtual Try-On Returning 502
+gradio_client 2.3.0 changed constructor signature from `hf_token=` to `token=`. **Fix**: Updated constructor call.

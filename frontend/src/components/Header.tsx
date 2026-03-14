@@ -1,41 +1,44 @@
 'use client'
 
-import { Sparkles } from 'lucide-react'
-
 export default function Header() {
   return (
-    <header className="bg-white border-b border-gray-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center space-x-3">
-            <div className="bg-gradient-to-r from-primary-500 to-purple-600 p-2 rounded-lg">
-              <Sparkles className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                Fashion Finder
-              </h1>
-              <p className="text-xs text-gray-500">AI-Powered Visual Search</p>
-            </div>
+    <header className="bg-noir text-white">
+      <div className="max-w-5xl mx-auto px-6 lg:px-8">
+        {/* Top strip */}
+        <div className="border-b border-white/10 py-2 flex items-center justify-between">
+          <p className="text-[10px] tracking-[0.3em] uppercase text-white/40">
+            AI-Powered Style Intelligence
+          </p>
+          <p className="text-[10px] tracking-[0.2em] uppercase text-gold/70">
+            ✦ Powered by Gemini · CLIP · LangGraph
+          </p>
+        </div>
+
+        {/* Main masthead */}
+        <div className="py-6 flex items-end justify-between gap-6">
+          <div>
+            <h1 className="font-serif text-5xl md:text-6xl font-light tracking-tight text-white leading-none">
+              Fashion<span className="text-gold italic"> Finder</span>
+            </h1>
+            <p className="mt-1 text-xs tracking-[0.25em] uppercase text-white/50">
+              Your Personal AI Stylist
+            </p>
           </div>
 
-          <nav className="hidden md:flex items-center space-x-6">
-            <a href="#" className="text-sm text-gray-600 hover:text-gray-900">
-              How it works
-            </a>
-            <a href="#" className="text-sm text-gray-600 hover:text-gray-900">
-              API Docs
-            </a>
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-gray-600 hover:text-gray-900"
-            >
-              GitHub
-            </a>
+          <nav className="hidden md:flex items-center gap-6 pb-1">
+            {['Discover', 'Trends', 'Try‑On'].map((item) => (
+              <span
+                key={item}
+                className="text-xs tracking-[0.2em] uppercase text-white/50 hover:text-gold transition-colors cursor-pointer"
+              >
+                {item}
+              </span>
+            ))}
           </nav>
         </div>
+
+        {/* Gold rule */}
+        <div className="h-px bg-gradient-to-r from-gold/60 via-gold/20 to-transparent" />
       </div>
     </header>
   )

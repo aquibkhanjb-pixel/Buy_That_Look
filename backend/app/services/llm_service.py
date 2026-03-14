@@ -1,11 +1,7 @@
 """
-LLM Service — Gemini AI integration for query expansion, re-ranking and vision.
+LLM Service — Gemini AI integration for vision.
 
 Uses the new google-genai SDK (google-generativeai is deprecated).
-
-Phase 1:
-  - expand_query   : rewrites vague queries into rich fashion descriptions
-  - rerank_results : scores CLIP candidates 0-10 and sorts by relevance
 
 Phase 2:
   - describe_image : generates a detailed text description of an uploaded image
@@ -14,8 +10,6 @@ Phase 2:
 All methods fall back gracefully if the API is unavailable.
 """
 
-import json
-import re
 from typing import Optional
 
 from loguru import logger
@@ -30,14 +24,12 @@ except ImportError:
 
 try:
     from google import genai
-    from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
     logger.warning("google-genai not installed — LLM features disabled")
 
-_MODEL = "gemini-2.5-flash"       # thinking disabled via thinking_budget=0 for structured tasks
-_CHAT_MODEL = "gemini-2.5-flash"  # thinking enabled for describe_image (richer vision understanding)
+_CHAT_MODEL = "gemini-2.5-flash"  # used for describe_image (richer vision understanding)
 
 
 class LLMService:
@@ -61,143 +53,13 @@ class LLMService:
         try:
             self._client = genai.Client(api_key=api_key)
             self._enabled = True
-            logger.info(f"LLM service initialised (Gemini / {_MODEL})")
+            logger.info(f"LLM service initialised (Gemini / {_CHAT_MODEL})")
         except Exception as exc:
             logger.error(f"LLM service failed to initialise: {exc}")
 
     @property
     def is_enabled(self) -> bool:
         return self._enabled and self._client is not None
-
-    # ------------------------------------------------------------------
-    # Phase 1A — Query Expansion
-    # ------------------------------------------------------------------
-
-    @traceable(name="expand_query", run_type="llm", tags=["gemini", "query-expansion"])
-    def expand_query(self, query: str) -> str:
-        """
-        Rewrite a vague user query into a detailed fashion product description.
-
-        Example:
-            "something for a beach party"
-            → "flowy casual sundress, light fabric, bright or pastel colours,
-               summer style, suitable for outdoor beach occasion"
-
-        Returns original query unchanged if Gemini is disabled or fails.
-        """
-        if not self.is_enabled:
-            return query
-
-        try:
-            prompt = (
-                f'A user is searching for fashion products with this query: "{query}"\n\n'
-                "Rewrite it as a specific, detailed fashion PRODUCT description "
-                "optimised for visual similarity search (CLIP embeddings).\n"
-                "Include relevant attributes: garment type, colour, style, occasion, fit, fabric.\n"
-                "STRICT RULES:\n"
-                "- Describe ONLY the clothing/accessory item itself\n"
-                "- Do NOT mention people, models, mannequins, or anyone wearing the clothes\n"
-                "- Do NOT use phrases like 'worn by', 'a man wearing', 'model in', 'person dressed'\n"
-                "- Focus on visual product attributes: colour, cut, fabric, embellishment\n"
-                "Keep it to 1-2 sentences. Return ONLY the product description, no explanation."
-            )
-
-            _no_think = types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            ) if GEMINI_AVAILABLE else None
-            response = self._client.models.generate_content(
-                model=_MODEL,
-                contents=prompt,
-                config=_no_think,
-            )
-            expanded = response.text.strip()
-
-            if expanded and expanded != query:
-                logger.info(f"Query expanded | '{query}' → '{expanded}'")
-                return expanded
-            return query
-
-        except Exception as exc:
-            logger.warning(f"Query expansion failed — using original. Reason: {exc}")
-            return query
-
-    # ------------------------------------------------------------------
-    # Phase 1B — Result Re-ranking
-    # ------------------------------------------------------------------
-
-    @traceable(name="rerank_results", run_type="llm", tags=["gemini", "reranking"])
-    def rerank_results(self, query: str, results: list) -> list:
-        """
-        Score each CLIP result for relevance against the user's query.
-
-        Scoring (0–10):
-            ≥ 6  → top result        (shown in "Top Results" section)
-            3–5  → possible match    (shown in "Other Possible Matches")
-            < 3  → hidden entirely
-
-        Each dict in `results` gets: "llm_score" (float | None).
-        List is sorted by llm_score descending.
-        Falls back to original CLIP order with llm_score=None if Gemini fails.
-        """
-        if not self.is_enabled or not results:
-            for r in results:
-                r["llm_score"] = None
-            return results
-
-        try:
-            lines = [
-                f"ID:{r.get('id', '')} | {r.get('title', 'Unknown')} | {r.get('category', '')}"
-                for r in results
-            ]
-            products_text = "\n".join(lines)
-
-            prompt = (
-                f'A user searched for: "{query}"\n\n'
-                "Rate how relevant each product is to this query.\n"
-                "Scale 0–10: 10=perfect match, 6=relevant, 3=loosely related, 0=unrelated.\n"
-                "Be strict — only give high scores to genuinely relevant products.\n\n"
-                f"Products:\n{products_text}\n\n"
-                "Return ONLY a JSON array, no markdown, no explanation:\n"
-                '[{"id": "product_id_here", "score": 8}, ...]'
-            )
-
-            _no_think = types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            ) if GEMINI_AVAILABLE else None
-            response = self._client.models.generate_content(
-                model=_MODEL,
-                contents=prompt,
-                config=_no_think,
-            )
-            response_text = response.text.strip()
-
-            json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
-            if not json_match:
-                raise ValueError(f"No JSON array in response: {response_text[:200]}")
-
-            scores_data = json.loads(json_match.group())
-            score_map: dict[str, float] = {
-                str(item["id"]): float(item["score"]) for item in scores_data
-            }
-
-            for r in results:
-                pid = str(r.get("id", ""))
-                r["llm_score"] = score_map.get(pid, 5.0)
-
-            results.sort(key=lambda x: x.get("llm_score") or 0, reverse=True)
-
-            top_scores = [round(r["llm_score"], 1) for r in results[:5]]
-            logger.info(
-                f"Re-ranked {len(results)} results for '{query[:40]}' | "
-                f"top-5 scores: {top_scores}"
-            )
-            return results
-
-        except Exception as exc:
-            logger.warning(f"Re-ranking failed — returning CLIP order. Reason: {exc}")
-            for r in results:
-                r["llm_score"] = None
-            return results
 
     # ------------------------------------------------------------------
     # Phase 2 — Image Description (Vision)
@@ -241,7 +103,7 @@ class LLMService:
             return description
 
         except Exception as exc:
-            logger.warning(f"Image description failed — falling back to CLIP only. Reason: {exc}")
+            logger.warning(f"Image description failed. Reason: {exc}")
             return None
 
 

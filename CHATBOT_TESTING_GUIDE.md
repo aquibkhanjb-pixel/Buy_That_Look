@@ -7,19 +7,27 @@
 
 ## Before You Start — Pre-flight Checklist
 
-- [ ] Backend server running: `uvicorn app.main:app --reload` (port 8000)
-- [ ] Frontend running: `npm run dev` (port 5173)
-- [ ] Gemini API key set in `.env` and verified working
-- [ ] FAISS index loaded (check terminal for "Loaded index with X vectors")
-- [ ] Open browser at `http://localhost:5173`
+- [ ] Backend server running: `conda activate fashion-ai` → `uvicorn app.main:app --reload` (port 8000)
+- [ ] Frontend running: `npm run dev` (port 3000)
+- [ ] Gemini API key set in `backend/.env` and verified working
+- [ ] Serper API key set in `backend/.env`
+- [ ] Open browser at `http://localhost:3000`
 - [ ] Open browser DevTools → Network tab (optional, to show API calls)
-- [ ] Have a fashion image ready to upload (see section 5)
+- [ ] Have a fashion image ready to upload (see Feature 5)
+
+**Expected backend startup log:**
+```
+LLM service ready
+LangGraph chat graph compiled successfully
+ReAct outfit subgraph compiled successfully
+Chat service (LangGraph) initialised
+```
 
 ---
 
 ## Feature 1 — Basic Text Search (new_search intent)
 
-**What to demonstrate:** Core search pipeline — Gemini features → CLIP → FAISS → Rerank → Response
+**What to demonstrate:** Core search pipeline — Classify → Extract → Serper web search → Response
 
 **Type:**
 ```
@@ -29,14 +37,14 @@ Show me blue cotton kurtas for men
 **What should happen:**
 - Intent classified as `new_search`
 - Features extracted: `{garment: "kurta", color: ["blue"], fabric: "cotton", gender: "men"}`
-- 6–12 product cards appear
-- Bot response is excited/helpful ("I found some great blue cotton kurtas for you!")
-- Feature suggestion appended (e.g., "Try specifying: sleeve length or occasion")
+- 6–10 product cards appear (sourced from Serper / Indian e-commerce sites)
+- Bot response is helpful ("I found some great blue cotton kurtas for you!")
+- Feature suggestion appended (e.g., "💡 Try specifying: sleeve length or occasion")
 
 **What to highlight:**
-- "Notice the CLIP semantic search — it understands 'blue cotton kurta' visually, not just keyword matching"
-- Point to the product cards: "These are ranked by Gemini's relevance score, not just visual similarity"
-- Point to the suggestion chip: "The bot proactively suggests what else I can specify to narrow results"
+- "Notice it understood 'blue cotton kurtas for men' — not just keyword matching, but structured feature extraction via Gemini"
+- "Products come from live web search — they're real products available to buy right now"
+- "The bot proactively suggests what else to specify to narrow results"
 
 ---
 
@@ -50,13 +58,13 @@ Show in white instead, under ₹1500
 **What should happen:**
 - Intent classified as `refine` (NOT new_search — conversation history is used)
 - Features updated: color → ["white"], max_price → 1500
-- New set of product cards, different from before
-- Bot response acknowledges the change ("Sure! I've updated the colour to white and filtered to your budget")
+- New set of product cards from a fresh Serper search
+- Bot acknowledges the change ("Sure! I've updated the colour to white and filtered to your budget")
 
 **What to highlight:**
 - "The intent changed from new_search to refine — it knows I'm modifying, not starting fresh"
-- "The price filter is passed directly to FAISS — only products under ₹1500 are retrieved"
-- "Gender (men) is still remembered even though I didn't mention it again"
+- "Gender (men) and fabric (cotton) are still remembered even though I didn't mention them"
+- "This is FashionFeatures.merge() — new values update, existing values carry forward"
 
 ---
 
@@ -69,15 +77,14 @@ Now show me a ring to match
 
 **What should happen:**
 - Intent: `new_search` (completely different item)
-- **Category switch detected**: shirt/kurta attributes reset, gender kept
-- Products shown are rings, NOT kurtas with ring-related filters
-- Feature suggestion is ring-specific: "Try specifying: metal (gold/silver/rose gold) or gemstone type"
+- **Category switch detected**: kurta-specific attributes reset, gender + budget kept
+- Products shown are rings, not kurtas with ring-related filters
+- Feature suggestion is ring-specific: "Try specifying: metal (gold/silver) or gemstone type"
 
 **What to highlight:**
-- "This is a key feature — the bot detects I switched from kurta to ring"
-- "Colour, pattern, and style from the kurta search are wiped"
-- "But if I had set my gender or budget, those would still apply to the ring search"
-- "The suggestion is garment-specific — rings get metal/gemstone suggestions, not sleeve type"
+- "The bot detected I switched from kurta to ring — product-specific attributes reset"
+- "But gender and budget still apply to the ring search"
+- "The suggestion adapts to the new garment type — rings get metal/gemstone suggestions"
 
 ---
 
@@ -91,12 +98,11 @@ These look great!
 ```
 
 **What should happen:**
-- Intent: `feedback_positive`
-- handle_feedback: `just_positive`
+- Intent: `feedback_positive` → `just_positive`
 - No new search triggered
-- Bot responds warmly: "Glad you like them! Would you like to see variations in different colours?"
+- Bot responds warmly: "Glad you like them! Would you like to see variations?"
 
-**What to highlight:** "The bot doesn't waste an API call re-searching when you're happy"
+**What to highlight:** "No wasted API call when the user is happy — the bot just responds conversationally"
 
 ---
 
@@ -108,37 +114,34 @@ Not exactly what I was looking for, show something more formal
 ```
 
 **What should happen:**
-- Intent: `feedback_negative`
-- handle_feedback: `wants_refinement`
+- Intent: `feedback_negative` → `wants_refinement`
 - Features updated: style → "formal"
-- New products shown
-- Bot response is apologetic + solution-focused
+- New Serper search runs, new products shown
+- Bot is apologetic + solution-focused
 
-**What to highlight:** "Negative feedback loops back through the feature extraction — 'formal' is added to the filter set"
+**What to highlight:** "Negative feedback re-triggers feature extraction — 'formal' is added to the next search"
 
 ---
 
-### 4C — Very Unsatisfied → Web Search
+### 4C — Very Unsatisfied
 
 **Type:**
 ```
-These are completely wrong, nothing is matching what I want, useless
+These are completely wrong, nothing is matching what I want
 ```
 
 **What should happen:**
-- Intent: `feedback_negative`
-- handle_feedback: `very_unsatisfied`
-- Web search triggered — direct shopping links appear
-- No product cards (local DB skipped)
-- Bot response: apologetic, tells you to check the links
+- Intent: `feedback_negative` → `very_unsatisfied`
+- Web search triggers immediately with direct shopping links
+- Bot is apologetic, explains the links
 
-**What to highlight:** "When the local database fails to satisfy, the system escalates to web links automatically"
+**What to highlight:** "When the user is very unhappy, the system escalates to direct platform links: Myntra → Ajio → Amazon → Flipkart → Meesho"
 
 ---
 
-## Feature 5 — Image Upload (Vision Search)
+## Feature 5 — Image Upload (Google Lens + Visual Search)
 
-**Prepare:** Have a fashion image ready (any kurta/dress/shirt photo)
+**Prepare:** Have any clothing/outfit photo ready
 
 **Upload the image** using the image button in the chat, then type:
 ```
@@ -146,15 +149,15 @@ Find similar products
 ```
 
 **What should happen:**
-- Gemini Vision describes the image: "Blue ethnic kurta, half sleeves, embroidered neckline"
-- CLIP query built from image description
-- Visually similar products returned
-- Bot mentions it analysed the image
+- Gemini Vision describes the image: e.g., "Blue ethnic kurta, half sleeves, embroidered neckline"
+- Google Lens search fires: image uploaded to catbox.moe → Serper `/lens` → visually identical products
+- Visual web search also runs: Gemini description → Serper text search
+- Both merged into results — some cards show "🔍 Google Lens" badge, others "🛒 Web Search"
 
 **What to highlight:**
-- "The system uses Gemini Vision — a multimodal model — to describe the uploaded clothing"
-- "That description becomes the CLIP text query, bridging vision and semantic search"
-- "This is the hybrid pipeline: image understanding → text query → FAISS similarity search"
+- "Three search threads run in parallel: text search, visual web search, and Google Lens"
+- "Google Lens finds products no keyword query would surface — it searches by visual appearance"
+- "The source badge on each product card tells you exactly how it was found"
 
 ---
 
@@ -166,28 +169,26 @@ Find blue kurtas on Flipkart
 ```
 
 **What should happen:**
-- Intent: `marketplace_search` (detected before Gemini even runs — keyword pre-check)
-- Runs through `extract_fashion_features` first (important — handles image context too)
-- Web search triggered, local DB skipped
-- **Flipkart link shown first**, followed by Amazon, Myntra, Ajio
-- URL format: `flipkart.com/search?q=blue+kurta` (properly encoded)
+- Intent: `marketplace_search` (detected before Gemini even classifies — keyword pre-check)
+- Runs through `extract_fashion_features` (handles image context too)
+- Flipkart search URL shown **first**, followed by Amazon, Myntra, Ajio
+- URL format: `flipkart.com/search?q=blue+kurta`
 
 **What to highlight:**
 - "Platform detection happens before Gemini classification — faster and more reliable"
-- "The query still goes through feature extraction, so if I had uploaded an image + asked for Flipkart, the image description would be used in the search query"
-- "Flipkart is always the first result since the user specifically asked for it"
+- "The target marketplace URL always appears first in the link list"
 
-**Also test Ajio specifically:**
+**Also test Ajio:**
 ```
 Search for maroon sarees on Ajio
 ```
-- Should show `ajio.com/search/?text=maroon+sarees` as the first link (previously this was broken)
+→ Should show `ajio.com/search/?text=maroon+sarees` as the first link
 
 ---
 
 ## Feature 7 — Clarification Flow
 
-**Start a fresh conversation (click New Chat)**
+**Start a fresh conversation (New Chat)**
 
 **Type (deliberately vague):**
 ```
@@ -196,69 +197,80 @@ Show me something nice
 
 **What should happen:**
 - Intent: `new_search`
-- FAISS returns some results but Gemini scores them low (best score 3–5, quality = "mediocre")
-- Bot asks ONE clarifying question: "What's the occasion — are you looking for something casual or formal?"
-- No product cards yet
-
-**Type an answer:**
-```
-Formal, for office
-```
-
-**What should happen:**
-- Features updated: occasion → "office", style → "formal"
-- Good results found this time (score ≥ 6)
-- Clarification count reset to 0
-- Products shown
-
-**What to highlight:**
-- "The system doesn't dump irrelevant results on you — it asks before showing poor matches"
-- "After 2 rounds of clarification without improvement, it automatically escalates to web search"
-
----
-
-## Feature 8 — General Conversation (non-search)
+- Garment type missing → ask_clarification fires
+- Bot asks ONE question: "What type of clothing are you looking for?"
+- No products shown yet
 
 **Type:**
 ```
-What can you help me with?
+A women's kurta for a casual day out under ₹1000
 ```
 
 **What should happen:**
-- Intent: `general`
-- Skips all search nodes entirely
-- Bot explains its capabilities conversationally
-- No product cards
+- Features: `{ garment: "kurta", gender: "women", occasion: "casual", max_price: 1000 }`
+- Serper search runs, products shown
+- Clarification count resets
 
-**Type:**
-```
-Hi, how are you?
-```
-
-**What should happen:**
-- Intent: `general`
-- Friendly conversational response
-- No search triggered
-
-**What to highlight:** "The bot recognises non-shopping messages and doesn't waste resources running a search"
+**What to highlight:**
+- "The system doesn't dump irrelevant results — it asks before showing poor matches"
+- "After 2 rounds of clarification, it proceeds regardless and shows the best it has"
 
 ---
 
-## Feature 9 — Circuit Breaker / API Resilience
+## Feature 8 — Outfit Completion (ReAct Subgraph)
 
-> **Note:** This is best explained conceptually unless you can simulate quota exhaustion.
+**First, do a search:**
+```
+Show me men's blue cotton kurta
+```
 
-**Explain what happens when Gemini API is unavailable:**
+**Then (once products appear):**
+```
+What can I pair this with?
+```
 
-1. **Intent classification fails** → keyword-based fallback activates instantly (no delay)
-2. **Feature extraction fails** → empty FashionFeatures, raw user message used as CLIP query
-3. **Re-ranking fails** → all scores are null → system treats this as "good" quality (shows CLIP results, doesn't route to web search)
-4. **Response generation fails** → pre-written message: *"My AI service is temporarily unavailable, but I found some visually similar products using image search"*
-5. **60-second circuit breaker** → no further Gemini calls until cooldown expires
+**What should happen (Turn 1 of outfit completion):**
+- Intent: `outfit_completion`
+- Bot asks: "What type of item would you like to pair — footwear, jewellery, or dupatta?"
+
+**Type:**
+```
+Footwear
+```
+
+**What should happen (Turn 2 — ReAct fires):**
+- ReAct subgraph extracts reference product attributes
+- Stylist Gemini call: determines juttis/mojaris for ethnic kurta
+- Serper searches for ethnic footwear
+- Results evaluated for style/colour match
+- If poor → query refined, search runs again (up to 5 iterations)
+- Complementary footwear products shown
 
 **What to highlight:**
-- "The system never crashes or returns random products when the API fails"
-- "CLIP alone is good enough for basic recommendations — Gemini is an enhancement, not a dependency"
+- "This is a ReAct (Reason + Act) agent — it searches, evaluates, and refines in a loop"
+- "It's looking at the first product I was shown and finding items that complement it"
+- "The system uses a colour complement table and style map to guide the search"
+
+---
+
+## Feature 9 — Trend Analyzer
+
+**Scroll to the top of the page (above the chat)**
+
+**What to show:**
+- 6 trend cards with real current fashion trends
+- Each card: trend name, description, badge (🔥 Hot / 📈 Rising / ✨ New), category, example items
+- Click "Explore trend →" on any card
+
+**What should happen:**
+- The trend's search query is fired directly into the chat assistant
+- Products matching that trend appear
+
+**What to highlight:**
+- "Trends are fetched live from fashion news via Serper, then structured by Gemini"
+- "The 'Explore trend' button fires a pre-crafted search query directly into the chatbot"
+- "Results are cached for 1 hour to avoid repeated API calls"
+- "Click Refresh to force a fresh fetch"
 
 ---
 
@@ -273,297 +285,84 @@ Show me women's formal dresses under ₹2000
 ```
 In black
 ```
-*(Notice: gender=women, price, and formal style all persist — only colour updated)*
+*(Gender, price, and formal style all persist — only colour updated)*
 
 ```
 For beach instead
 ```
-*(Occasion changes, but gender/price still remembered)*
+*(Occasion changes to beach, but gender/price still remembered)*
 
 **What to highlight:**
-- "The `FashionFeatures` object accumulates across the entire conversation"
+- "FashionFeatures accumulates across the entire conversation"
 - "When I say 'in black', it knows to keep women/formal/₹2000 — it's a refinement, not a new search"
-- "This state is maintained on the server AND mirrored to the frontend as a safety net"
+- "Session state is maintained server-side for the duration of the conversation"
+
+---
+
+## Feature 11 — Circuit Breaker / API Resilience
+
+> **Note:** Best explained conceptually unless you can simulate quota exhaustion.
+
+**Explain what happens when Gemini API is unavailable:**
+
+1. **Intent classification fails** → keyword-based fallback activates instantly
+2. **Feature extraction fails** → raw user message used directly as search query
+3. **Response generation fails** → pre-written message: *"My AI service is temporarily unavailable, but here are the best matches I found"*
+4. **60-second circuit breaker** → no further Gemini calls until cooldown expires
+5. **Serper still runs** → users always get product results, even without AI
+
+**What to highlight:**
+- "The system never crashes or shows a blank error screen"
+- "Serper runs independently — product discovery always works"
 
 ---
 
 ## Quick Demo Script (5-minute version)
 
-Use this condensed sequence for a time-limited demo:
-
 | Step | Input | Feature Shown |
 |------|-------|--------------|
-| 1 | `Show me blue cotton kurtas for men` | Basic search, CLIP+FAISS, re-ranking |
+| 1 | `Show me blue cotton kurtas for men` | Basic search, feature extraction, Serper |
 | 2 | `In red, under ₹1000` | Refinement, session memory |
 | 3 | `Now show me matching rings` | Category switch detection |
 | 4 | `Find these on Myntra` | Marketplace routing, direct links |
-| 5 | Upload image + `Find similar` | Gemini Vision, hybrid search |
-| 6 | `Love these!` | Positive feedback handling |
-| 7 | `What can you help me with?` | General intent, no wasted search |
+| 5 | Upload image + `Find similar` | Google Lens + visual search |
+| 6 | `What can I pair this with?` | Outfit completion, ReAct agent |
+| 7 | Scroll up to Trend Analyzer → click "Explore trend →" | Trend intelligence |
 
 ---
 
 ## Things That Were Fixed (Good to Mention)
 
-These are real bugs that were identified and fixed — shows production-level thinking:
+These are real bugs that were identified and resolved — demonstrates production-level thinking:
 
 | Bug | Fix |
 |----|-----|
-| Flipkart appearing as "brand" filter | Marketplace blocklist in feature extraction prompt |
-| CLIP query included "a man wearing..." | LLM prompt rules — describe item only, not person |
-| Category switch (shirt→ring) showing shirt colours | Category-switch detection, reset product-specific attrs |
+| Flipkart appearing as "brand" filter → 0 results | Marketplace blocklist in feature extraction prompt |
+| Google Lens results not showing for ethnic wear | Moved Lens to `web_search` node (was in `search_local_db` which early-returned) |
+| Serper Lens returning empty (`visual_matches` key wrong) | Fixed to use `"organic"` key |
+| Serper Lens 403 with old API key | New Serper key with Lens plan |
+| Image upload failed for Lens (base64 not accepted) | catbox.moe upload → public URL |
 | Ajio links returning 0 results | Fixed URL: `/search/?text=` instead of `/s/` |
 | Web results empty even when search succeeded | `update_memory` no longer resets output fields |
-| API quota exhaustion → random 12 products shown | Quality gate: null scores → "good" (show CLIP results) |
-| 503 errors not caught by circuit breaker | Added "503"/"UNAVAILABLE" check with 30s backoff |
-| Image ignored when platform mentioned | Marketplace now routes through feature extraction first |
+| Virtual try-on returning 502 | `hf_token=` → `token=` (gradio_client 2.3.0 breaking change) |
+| Category switch carrying stale attributes | Category-switch detection resets product-specific attrs |
+| 503 errors not caught by circuit breaker | Added "503/UNAVAILABLE" check with 30s backoff |
 
 ---
 
 ## Common Interview Questions & Answers
 
 **"How does the recommendation get better over time in a session?"**
-> Each turn, `FashionFeatures` accumulates. Gender, budget, and style preferences persist. Only when you switch garment types do product-specific attributes reset. By turn 3–4, the CLIP query is highly specific, leading to much better FAISS results.
+> Each turn, `FashionFeatures` accumulates. Gender, budget, and style preferences persist. Only when you switch garment types do product-specific attributes reset. By turn 3–4, the Serper query is highly specific, leading to much better results.
 
 **"What's the latency?"**
-> One turn takes roughly: 200ms (CLIP encode) + 300ms (FAISS search) + 800ms (Gemini classify + extract + rerank + response) = ~1.3 seconds total. The biggest variable is Gemini API response time.
+> One turn takes roughly: 300ms (classify_intent) + 400ms (extract_features) + 2-3s (web_search with Gemini Vision verification) + 400ms (generate_response) = ~3-4 seconds total. The bottleneck is Serper + Gemini Vision thumbnail verification.
 
-**"What if the product database doesn't have what the user wants?"**
-> The quality gate handles this: mediocre results → ask clarification, poor/empty results → web search with direct links. The user is never shown irrelevant results silently.
+**"Why not just use a local product database?"**
+> We removed FAISS and CLIP entirely. A local DB gets stale, requires a scraping + embedding pipeline, and is limited to what you scraped. Serper gives real-time results from every major Indian e-commerce site. Google Lens finds visually identical products no keyword query would surface.
 
-**"How does the image search work technically?"**
-> Gemini Vision generates a text description of the image. That description is then encoded by CLIP into a 512-dimensional embedding. FAISS finds the nearest product embeddings in the index. This bridges the image-to-image gap using language as an intermediary.
+**"How does image search work technically?"**
+> Three parallel threads: (1) Gemini Vision describes the image → used as Serper text query with thumbnail verification, (2) Image uploaded to catbox.moe → Serper Google Lens → visually identical products, (3) all results merged by URL. Users get both semantically and visually matched results.
 
 **"Why not just use GPT-4 for everything?"**
-> Cost and latency. Gemini Flash Lite is fast and cheap for classification/extraction tasks. CLIP + FAISS handles visual similarity at millisecond speed with no API cost after initial setup. We use Gemini Vision only for image uploads (one call), not for every search.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- How to Verify Each Feature                                                                                                                                                                                                                                                                  
-  Setup: Two windows open while testing
-
-  1. Backend terminal — watch log output in real time
-  2. Browser/Postman — send chat messages and inspect raw API response (JSON)
-
-  ---
-  Feature 1 — Negative Preference Memory
-
-  Goal: After you say you dislike something, it should never appear again.
-
-  Test script:
-  Turn 1: "Show me men's kurtas"
-  Turn 2: (look at results)
-  Turn 3: "I don't like floral prints, show something else"
-  Turn 4: "Show me more kurtas"
-  Turn 5: "Show me something different, not red color"
-  Turn 6: "More kurtas please"
-
-  What to look for in logs:
-  Negative preferences updated: {'patterns': ['floral']}
-  Negative filter: 12 → 9 products          ← filtering happened
-
-  Negative preferences updated: {'patterns': ['floral'], 'colors': ['red']}
-  Negative filter: 12 → 7 products          ← cumulative filtering
-
-  How to verify it's not hallucinating:
-  - Turn 4 products should have NO floral in their titles/descriptions
-  - Turn 6 products should have NO floral AND NO red
-  - Check product titles manually in the response JSON
-
-  Bug signal: Negative filter: 12 → 12 (nothing filtered — disliked feature not matching product text) or "Negative preferences updated" never 
-  appears.
-
-  ---
-  Feature 2 — Slot Filling
-
-  Goal: When critical info is missing, the bot asks the MOST IMPORTANT slot first, not a random question.
-
-  Test script — Priority order test:
-  Turn 1: "Show me something nice"
-    → Expected question: "What type of clothing are you looking for? (kurta/dress/jeans…)"
-    → Log: "top_slot=garment_type"
-
-  Turn 2: "A kurta"
-    → Expected question: "Is this for men or women?"
-    → Log: "top_slot=gender"
-
-  Turn 3: "For women"
-    → Expected question: "What's the occasion?"
-    → Log: "top_slot=occasion"
-
-  What to look for in logs:
-  Features extracted | missing_slots=['garment_type', 'gender', 'occasion', 'budget', 'color']
-  Slot clarification #1 | top_slot=garment_type
-
-  Hallucination check:
-  - If Turn 1 asks "Do you have a color preference?" instead of garment_type → slot priority is broken
-  - If the log shows top_slot=None when clearly slots are missing → _compute_missing_slots isn't running
-
-  Shortcut to verify slots: After any search, look for this log line:
-  Features extracted | missing_slots=['occasion', 'budget']
-  The remaining missing slots should make sense given what the user has already told the bot.
-
-  ---
-  Feature 3 — Personalized Re-ranking
-
-  Goal: The re-ranking prompt must include accumulated preferences, not just the current message.
-
-  Test script:
-  Turn 1: "I'm a woman looking for casual cotton kurtas under ₹1500"
-    → Search happens, results shown
-
-  Turn 2: "Show me more options"
-    → Very vague — re-ranker must use session prefs to score correctly
-
-  What to look for in logs:
-
-  After Turn 2, the re-ranking internally builds a rich query. You won't see it in logs directly, but you can add a temporary log or check     
-  LangSmith traces. In LangSmith:
-  - Open the rerank_results span
-  - Look at the input to llm_service.rerank_results()
-  - The query argument should look like:
-  Show me more options | User preferences: women kurta cotton casual for ₹1500
-  - NOT just:
-  Show me more options
-
-  Hallucination check:
-  - Turn 2 should NOT return men's products or formal wear, even though "show me more options" has no gender/style info
-  - If Turn 2 results are random/uncorrelated to Turn 1 preferences → Feature 3 not working
-
-  ---
-  Feature 4 — Outfit Completion
-
-  Goal: When you ask "what goes with this?", it must search for COMPLEMENTARY items, not more of the same.
-
-  Test script:
-  Turn 1: "Show me men's blue cotton kurta"
-    → Results shown (kurtas)
-
-  Turn 2: "What can I pair this with?"
-    → Must NOT show more kurtas
-    → Should show: churidar / palazzo / ethnic juttis / dupatta
-
-  Turn 3: "What shoes go with this kurta?"
-    → Should show: ethnic footwear / juttis / mojaris
-
-  What to look for in logs:
-  Intent classified: outfit_completion
-  Outfit completion | ref='kurta' | query='men ethnic juttis to pair with kurta...'
-  Parallel search | primary=12 secondary=8 unique=16
-
-  Hallucination checks:
-  - If log shows Intent classified: new_search instead of outfit_completion → keyword detection failed
-  - If results are more kurtas → outfit_completion_node isn't overriding the search params
-  - If ref='' → the node couldn't find the reference garment (check if last_shown is being persisted)
-
-  Edge case test:
-  Turn 1: (fresh session) "What goes with a saree?"
-    → Should work even without previous search — uses 'saree' from the message
-
-  ---
-  Feature 5 — Parallel Search
-
-  Goal: Two FAISS searches run simultaneously; the unique count should be MORE than just the primary alone.
-
-  Test script:
-  Any search where your raw query differs from the extracted CLIP query:
-  "Find me something to wear to a beach wedding"
-  The primary query will be structured features like "women dress beach casual" and the secondary will use the raw message "Find me something  
-  to wear to a beach wedding".
-
-  What to look for in logs:
-  Parallel search | primary=12 secondary=8 unique=17
-  - secondary should be > 0 (secondary search ran)
-  - unique should be between max(primary, secondary) and primary + secondary
-
-  Possible issue — secondary always = 0:
-  This happens when raw_query == params.query (Gemini features produced an identical query to the raw message). This is rare for natural       
-  language queries but common for already-structured inputs like "blue kurta men".
-
-  How to force secondary search: Use a vague query:
-  "Something nice for a party"
-  Primary = "women party dress formal", Secondary = "Something nice for a party" → guaranteed to differ.
-
-  ---
-  Feature 6 — Result Explanation ("Why This?")
-
-  Goal: Every product in the response JSON should have a match_reason field with a non-empty explanation.
-
-  Test script:
-  "Show me blue cotton kurta for men under ₹1200"
-
-  How to inspect: Use browser DevTools → Network tab → find the /api/v1/chat/ POST → look at Response JSON:
-  {
-    "products": [
-      {
-        "title": "Men's Blue Cotton Kurta",
-        "price": 999,
-        "match_reason": "Matches: kurta, blue, within budget",
-        ...
-      },
-      {
-        "title": "Ethnic Cotton Shirt",
-        "price": 850,
-        "match_reason": "Matches: cotton fabric, within budget",
-        ...
-      }
-    ]
-  }
-
-  Hallucination check:
-  - If a product with title "Red Silk Dress" has match_reason: "Matches: kurta, blue" → the reason is lying (false match detection). This      
-  shouldn't happen since the rule-based function checks string containment.
-  - If match_reason: "" for ALL products → preferences weren't extracted correctly (check user_preferences is populated)
-  - For strong matches (score ≥ 8), even empty-reason products get "Strong match" as fallback
-
-  ---
-  Quick Feature Health Check — One Session
-
-  Run this single conversation to hit all 6 features at once:
-
-  ┌──────┬──────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐   
-  │ Turn │               Message                │                                      Feature Tested                                      │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 1    │ "Show me something nice"             │ Feature 2 (asks garment_type slot)                                                       │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 2    │ "A women's kurta"                    │ Feature 2 (asks next slot: occasion)                                                     │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 3    │ "For a casual day out under ₹1000"   │ Feature 2 complete + Feature 5 (parallel search) + Feature 6 (check match_reason in      │   
-  │      │                                      │ JSON)                                                                                    │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 4    │ "I don't like floral or printed      │ Feature 1 (negative extraction + log)                                                    │   
-  │      │ ones"                                │                                                                                          │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 5    │ "Show more"                          │ Feature 1 (filter applied) + Feature 3 (prefs in rerank)                                 │   
-  ├──────┼──────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤   
-  │ 6    │ "What can I pair this with?"         │ Feature 4 (outfit completion)                                                            │   
-  └──────┴──────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘   
-
-  Check these in order after Turn 6:
-  1. ✅ Log: Negative preferences updated after Turn 4
-  2. ✅ Log: Negative filter: N → M after Turn 5
-  3. ✅ Log: Intent classified: outfit_completion after Turn 6
-  4. ✅ API response: match_reason field exists on Turn 3+ products
-  5. ✅ Log: Parallel search | primary=X secondary=Y unique=Z on every search turn
-  6. ✅ Log: Slot clarification #1 | top_slot=garment_type after Turn 1
+> Cost and latency. Gemini Flash Lite is fast and cheap for classification/extraction tasks. Serper handles product discovery with no per-result AI cost. We use Gemini Vision only for image uploads and thumbnail verification — not on every single product.

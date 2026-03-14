@@ -79,3 +79,18 @@ export interface TryOnResponse {
   model_used: string
   latency_ms: number
 }
+
+export interface TrendItem {
+  name: string
+  description: string
+  category: string
+  badge: string
+  search_query: string
+  example_items: string[]
+}
+
+export interface TrendsResponse {
+  trends: TrendItem[]
+  updated_at: string
+  source: string
+}

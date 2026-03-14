@@ -12,7 +12,6 @@ from app.core.logging import logger
 from app.models.product import Product
 from app.schemas.product import ProductDetail, ProductList
 from app.schemas.search import SearchResponse, SearchResult
-from app.services.search_engine import search_engine
 from app.config import get_settings
 
 router = APIRouter()
@@ -99,34 +98,12 @@ async def get_similar_products(
     """
     start_time = time.time()
 
-    # Check if search engine is ready
-    if not search_engine.is_ready():
-        logger.warning("Search engine not ready - returning empty results")
-        return SearchResponse(
-            query_id=str(product_id),
-            results=[],
-            latency_ms=0,
-            total_results=0,
-        )
-
-    # Get similar products from FAISS index
-    raw_results = search_engine.get_similar_to_product(
-        product_id=str(product_id),
-        k=k,
-        exclude_self=True,
-    )
-
-    # Convert to response format
-    results = convert_to_search_results(raw_results)
-    latency_ms = int((time.time() - start_time) * 1000)
-
-    logger.info(f"Similar products for {product_id}: {len(results)} results in {latency_ms}ms")
-
+    # Similar product search via FAISS has been removed (AI chat assistant handles recommendations)
     return SearchResponse(
         query_id=str(product_id),
-        results=results,
-        latency_ms=latency_ms,
-        total_results=len(results),
+        results=[],
+        latency_ms=0,
+        total_results=0,
     )
 
 

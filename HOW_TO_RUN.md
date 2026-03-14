@@ -149,4 +149,4 @@ source activate fashion-ai
 | Backend API | http://localhost:8000 |
 | API Docs (Swagger) | http://localhost:8000/docs |
 | Health Check | http://localhost:8000/api/v1/health |
-| Search Stats | http://localhost:8000/api/v1/search/stats |
+| Trends API | http://localhost:8000/api/v1/trends/ |
