@@ -48,6 +48,7 @@ export async function sendChatMessage(
     image?: File
     userPreferences?: Record<string, unknown>
     clarificationCount?: number
+    fromTrend?: boolean
   } = {}
 ): Promise<ChatResponse> {
   const formData = new FormData()
@@ -64,6 +65,9 @@ export async function sendChatMessage(
   }
   if (options.image) {
     formData.append('image', options.image)
+  }
+  if (options.fromTrend) {
+    formData.append('from_trend', 'true')
   }
 
   const response = await api.post<ChatResponse>('/chat/', formData, {

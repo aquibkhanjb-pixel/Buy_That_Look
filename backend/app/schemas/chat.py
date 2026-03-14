@@ -141,3 +141,5 @@ class ChatResponse(BaseModel):
     # Returned to frontend so it can send back on next turn
     user_preferences: Dict[str, Any] = Field(default_factory=dict)
     clarification_count: int = 0
+    # MCQ quick-pick chips shown when bot asks a clarification question
+    options: List[str] = []

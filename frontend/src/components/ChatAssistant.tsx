@@ -28,6 +28,7 @@ interface MessageBubble {
   imagePreview?: string
   products?: SearchResult[]
   webLinks?: WebLink[]
+  options?: string[]   // MCQ chips for clarification questions
   isLoading?: boolean
 }
 
@@ -193,7 +194,7 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
   }, [bubbles])
 
   useEffect(() => {
-    if (triggerRef) triggerRef.current = (query: string) => sendMessage(query)
+    if (triggerRef) triggerRef.current = (query: string) => sendMessage(query, undefined, true)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -210,7 +211,7 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  const sendMessage = async (text: string, imageFile?: File) => {
+  const sendMessage = async (text: string, imageFile?: File, fromTrend = false) => {
     const messageText = text.trim()
     if (!messageText && !imageFile) return
     if (isLoading) return
@@ -228,7 +229,7 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
 
     try {
       const response = await sendChatMessage(apiMessages.current, {
-        conversationId, image: imageFile, userPreferences, clarificationCount,
+        conversationId, image: imageFile, userPreferences, clarificationCount, fromTrend,
       })
       if (response.conversation_id) setConversationId(response.conversation_id)
       if (response.user_preferences) setUserPreferences(response.user_preferences as Record<string, unknown>)
@@ -241,6 +242,7 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
           content: response.message,
           products:  response.products  as unknown as SearchResult[],
           webLinks:  response.web_results as unknown as WebLink[],
+          options:   response.options,
         },
       ])
     } catch {
@@ -263,7 +265,7 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
         </div>
         <div>
           <p className="text-sm font-semibold text-noir tracking-tight">AI Style Assistant</p>
-          <p className="text-[10px] text-noir/40 tracking-wide">Powered by Gemini + CLIP</p>
+          <p className="text-[10px] text-noir/40 tracking-wide">Powered by Gemini · Serper</p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -308,6 +310,22 @@ export default function ChatAssistant({ onProductClick, triggerRef }: ChatAssist
                   <p className="whitespace-pre-line">{msg.content}</p>
                 )}
               </div>
+
+              {/* MCQ clarification chips */}
+              {msg.role === 'assistant' && msg.options && msg.options.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {msg.options.map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={() => sendMessage(opt)}
+                      disabled={isLoading}
+                      className="text-[12px] px-3.5 py-1.5 bg-white border border-ivory-dark text-noir/70 rounded-full hover:bg-gold/10 hover:border-gold/40 hover:text-noir transition-all disabled:opacity-40 shadow-sm"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Local DB product strip */}
               {msg.products && msg.products.length > 0 && (

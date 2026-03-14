@@ -60,6 +60,7 @@ export interface ChatResponse {
   web_search_performed: boolean
   user_preferences: Record<string, unknown>
   clarification_count: number
+  options: string[]  // MCQ quick-pick chips for clarification questions
 }
 
 export interface WebSearchResult {

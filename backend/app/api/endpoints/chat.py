@@ -60,6 +60,7 @@ async def chat(
     conversation_id: Optional[str] = Form(default=None),
     user_preferences: Optional[str] = Form(default=None, description="JSON dict of accumulated prefs"),
     clarification_count: int = Form(default=0),
+    from_trend: bool = Form(default=False),
     # Optional image
     image: Optional[UploadFile] = File(default=None, description="Optional image for visual search"),
     db: Session = Depends(get_db),
@@ -135,6 +136,7 @@ async def chat(
         image_bytes=image_bytes,
         user_preferences=prefs_dict,
         clarification_count=clarification_count,
+        from_trend=from_trend,
     )
 
     # ── Convert products to SearchResult schema ──
@@ -159,4 +161,5 @@ async def chat(
         web_search_performed=result.get("web_search_performed", False),
         user_preferences=result.get("user_preferences", {}),
         clarification_count=result.get("clarification_count", 0),
+        options=result.get("clarification_options", []),
     )

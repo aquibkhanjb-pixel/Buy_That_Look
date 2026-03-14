@@ -118,6 +118,12 @@ class ChatState(TypedDict):
     # Cross-turn search context (prevents wrong-category web searches after outfit completion)
     last_search_query: str         # The actual search query used in the previous turn
 
+    # Trend-card bypass: skip clarification when query comes from a trend card
+    from_trend: bool               # If True, _post_extract_router skips ask_clarification
+
+    # MCQ options for clarification (sent to frontend as clickable chips)
+    clarification_options: List[str]
+
     # Sticky web-search mode: once True, kept for the session
     web_search_mode: bool          # Set when user searches a marketplace; sticks for the session
 
@@ -1330,42 +1336,62 @@ def ask_clarification(state: ChatState) -> ChatState:
 
     # Human-readable slot questions (for Gemini hint + fallback)
     _slot_prompts: Dict[str, str] = {
-        "garment_type": "What type of clothing are you looking for? (e.g. kurta, dress, jeans, shirt)",
+        "garment_type": "What type of clothing are you looking for?",
         "gender":       "Is this for men or women?",
-        "occasion":     "What's the occasion? (casual, wedding, office, party, festival…)",
+        "occasion":     "What's the occasion?",
         "budget":       "What's your budget or price range?",
-        "color":        "Do you have a color preference?",
+        "color":        "Do you have a colour preference?",
+    }
+
+    # MCQ quick-pick options per slot (shown as clickable chips in the frontend)
+    _slot_options: Dict[str, List[str]] = {
+        "garment_type": [
+            "👗 Dress / Skirt", "👔 Shirt / Top", "🧣 Kurta / Ethnic wear",
+            "👖 Jeans / Trousers", "🧥 Jacket / Coat", "👟 Footwear",
+            "👜 Bag / Handbag", "💍 Jewellery / Accessories",
+        ],
+        "gender":   ["Women", "Men", "Unisex / Either"],
+        "occasion": [
+            "🎉 Wedding / Party", "👔 Office / Formal", "🏖️ Casual / Vacation",
+            "🕌 Festival / Ethnic", "💑 Date Night", "🏃 Sports / Active",
+        ],
+        "budget":   ["Under ₹500", "₹500 – ₹1,500", "₹1,500 – ₹3,000", "₹3,000 – ₹8,000", "₹8,000+"],
+        "color":    [
+            "⬛ Black / Dark", "⬜ White / Cream", "🔵 Blue / Navy",
+            "🌿 Earthy / Neutral", "🌸 Pastel / Soft", "🔴 Bold / Bright", "No preference",
+        ],
     }
 
     top_slot     = missing_slots[0] if missing_slots else None
     slot_hint    = f"Most important missing info: {_slot_prompts.get(top_slot, top_slot)}" if top_slot else ""
+    options      = _slot_options.get(top_slot, []) if top_slot else []
 
     if llm_service.is_enabled:
         prompt = (
             "You are a helpful fashion assistant. "
-            "The search didn't find great matches. Ask ONE short, friendly question "
-            "to help narrow the search.\n\n"
+            "Ask ONE short, friendly question to help narrow the search. "
+            "Keep it warm and conversational — the user will also see clickable option chips "
+            "so just ask the question, don't list choices.\n\n"
             f"Conversation so far:\n{history}\n\n"
             f"{slot_hint}\n\n"
-            "Ask only ONE question. Keep it conversational. Return ONLY the question."
+            "Return ONLY the question, nothing else."
         )
         question = _gemini_call(prompt)
         if not question:
-            question = (_slot_prompts.get(top_slot, "Could you tell me more about the style or occasion?")
-                        if top_slot else "Could you tell me more about the style or occasion?")
+            question = _slot_prompts.get(top_slot, "Could you tell me a bit more about what you're looking for?")
     else:
-        question = (_slot_prompts.get(top_slot, "Could you tell me more about what you're looking for?")
-                    if top_slot else "Could you tell me more about what you're looking for?")
+        question = _slot_prompts.get(top_slot, "Could you tell me a bit more about what you're looking for?")
 
     new_count = count + 1
-    logger.info(f"Slot clarification #{new_count} | top_slot={top_slot} | {question[:60]}")
+    logger.info(f"Slot clarification #{new_count} | top_slot={top_slot} | options={len(options)} | {question[:60]}")
 
     return {
         **state,
-        "response": question,
-        "clarification_count": new_count,
-        "products_to_show": [],
-        "web_results": [],
+        "response":               question,
+        "clarification_count":    new_count,
+        "products_to_show":       [],
+        "web_results":            [],
+        "clarification_options":  options,
     }
 
 
@@ -2355,6 +2381,9 @@ def _build_graph():
     def _post_extract_router(s: ChatState) -> str:
         if s["intent"] == "marketplace_search":
             return "web_search"
+        # Trend-card queries already have rich context — skip clarification
+        if s.get("from_trend"):
+            return "web_search"
         if (
             s["intent"] == "new_search"
             and "garment_type" in s.get("missing_slots", [])
@@ -2446,6 +2475,7 @@ class ChatService:
         image_bytes: Optional[bytes] = None,
         user_preferences: Optional[dict] = None,
         clarification_count: int = 0,
+        from_trend: bool = False,
     ) -> dict:
         """
         Run the conversation through the graph.
@@ -2489,6 +2519,8 @@ class ChatService:
             "last_search_query":      last_search_query,
             "awaiting_outfit_detail": awaiting_outfit_detail,
             "web_search_mode":        web_search_mode,
+            "from_trend":             from_trend,
+            "clarification_options":  [],
         }
 
         if self._graph is not None:
@@ -2549,6 +2581,7 @@ class ChatService:
             "clarification_count": result.get("clarification_count", 0),
             "search_performed": result.get("intent", "") in ("new_search", "refine"),
             "web_search_performed": result.get("web_search_triggered", False),
+            "clarification_options": result.get("clarification_options", []),
         }
 
 
