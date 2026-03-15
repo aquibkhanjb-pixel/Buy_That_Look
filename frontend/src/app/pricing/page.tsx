@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSession } from 'next-auth/react'
 import { useSearchParams } from 'next/navigation'
 import { Check, Crown, Sparkles, Loader2, X } from 'lucide-react'
@@ -71,7 +71,7 @@ function loadRazorpayScript(): Promise<boolean> {
   })
 }
 
-export default function PricingPage() {
+function PricingContent() {
   const { data: session, update: updateSession } = useSession()
   const searchParams = useSearchParams()
   const success = searchParams.get('success') === 'true'
@@ -290,5 +290,13 @@ export default function PricingPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense fallback={null}>
+      <PricingContent />
+    </Suspense>
   )
 }
