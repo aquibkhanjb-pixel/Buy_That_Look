@@ -130,6 +130,11 @@ class ChatState(TypedDict):
     # Outfit completion — waiting for user to specify what TYPE of item they want
     awaiting_outfit_detail: bool   # True when bot asked "footwear/accessories/bottom?" and waiting for answer
 
+    # The ORIGINAL product the user wants to style — locked for the whole outfit exchange.
+    # Never overwritten by outfit results so sequential chips (shoes → accessories) still
+    # reference the same base garment.
+    outfit_reference_product: dict
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OutfitState — isolated state for the ReAct outfit completion subgraph
@@ -461,6 +466,7 @@ _COMPLEMENT_KEYWORDS: Dict[str, List[str]] = {
     "bottom":      ["palazzo", "churidar", "leggings", "salwar", "skirt", "trouser",
                     "pants", "bottom", "pant"],
     "top":         ["blouse", "top", "shirt", "kurti", "crop"],
+    "sunglasses":  ["sunglasses", "eyewear", "sunglass", "glasses", "shades"],
 }
 
 
@@ -1484,7 +1490,9 @@ def outfit_completion_node(state: ChatState) -> ChatState:
     user_prefs  = FashionFeatures(**state.get("user_preferences", {}))
     outfit_ctx  = state.get("outfit_context", "")
     awaiting    = state.get("awaiting_outfit_detail", False)
-    ref_product = state.get("last_shown_product", {})   # Full product dict
+    # outfit_reference_product is the locked base garment (set when "Complete the Look" clicked).
+    # Falls back to last_shown_product for backwards-compat with manual "complete my outfit" text.
+    ref_product = state.get("outfit_reference_product") or state.get("last_shown_product", {})
 
     # ── Identify reference garment ────────────────────────────────────────
     ref_garment = user_prefs.garment_type or ""
@@ -1530,6 +1538,14 @@ def outfit_completion_node(state: ChatState) -> ChatState:
             "response":         question,
             "products_to_show": [],
             "web_results":      [],
+            "clarification_options": [
+                "👟 Footwear",
+                "💍 Accessories / Jewellery",
+                "👖 Bottom Wear",
+                "🧣 Dupatta / Scarf",
+                "👜 Bag / Clutch",
+                "🕶️ Sunglasses / Eyewear",
+            ],
         }
 
     # ── Step 3: Type is known → run the ReAct subgraph ───────────────────
@@ -1581,16 +1597,48 @@ def outfit_completion_node(state: ChatState) -> ChatState:
         outfit_result["iteration"]  = 1
         outfit_result = oa_format_response(outfit_result)
 
+    # Build follow-up chips — all complement types EXCEPT the one just shown.
+    # This lets the user tap another type without typing; outfit_reference_product
+    # stays locked so every chip references the same base garment.
+    _ALL_COMPLEMENT_CHIPS = [
+        "👟 Footwear",
+        "💍 Accessories / Jewellery",
+        "👖 Bottom Wear",
+        "🧣 Dupatta / Scarf",
+        "👜 Bag / Clutch",
+        "🕶️ Sunglasses / Eyewear",
+    ]
+    _type_keywords = {
+        "footwear":     ["footwear", "shoe", "sandal", "heel", "boot", "jutti"],
+        "accessories":  ["accessor", "jeweller", "jewelry", "earring", "necklace", "ring", "bangle"],
+        "bottom":       ["bottom", "trouser", "palazzo", "churidar", "legging", "jean"],
+        "dupatta":      ["dupatta", "scarf", "stole"],
+        "bag":          ["bag", "clutch", "purse", "handbag"],
+        "sunglasses":   ["sunglass", "eyewear", "glass"],
+    }
+    used_key = next(
+        (k for k, kws in _type_keywords.items() if any(kw in type_label.lower() for kw in kws)),
+        None,
+    )
+    follow_up_chips = [
+        c for c in _ALL_COMPLEMENT_CHIPS
+        if used_key is None or not any(kw in c.lower() for kw in _type_keywords.get(used_key, []))
+    ]
+
     # Map ReAct results back into ChatState (skip generate_response — response already set)
+    # Keep awaiting_outfit_detail=True so follow-up chips ("Accessories", "Bottom Wear" etc.)
+    # are still routed to outfit_completion_node without the user having to type anything.
+    # It is cleared only when the user explicitly starts a new product search.
     return {
         **state,
-        "awaiting_outfit_detail": False,
+        "awaiting_outfit_detail": True,
         "response":              outfit_result.get("outfit_response", ""),
         "web_results":           outfit_result.get("outfit_web_results", []),
         "web_search_triggered":  True,
         "products_to_show":      [],
         "intent":                "outfit_completion",
         "last_search_query":     outfit_result.get("current_query", ""),
+        "clarification_options": follow_up_chips,
     }
 
 
@@ -2349,12 +2397,18 @@ def _build_graph():
     # Intent routing — also routes to outfit_completion_node when bot is
     # waiting for the user to specify what TYPE of complement they want
     def _intent_router(s: ChatState) -> str:
-        if s["intent"] == "outfit_completion" or s.get("awaiting_outfit_detail"):
-            return "outfit_completion_node"
-        if s["intent"] in ("new_search", "refine", "marketplace_search"):
+        intent = s["intent"]
+        # New/refine/marketplace searches always go to feature extraction — even if
+        # awaiting_outfit_detail is True (user started a new search, breaking the outfit flow).
+        if intent in ("new_search", "refine", "marketplace_search"):
             return "extract_fashion_features"
-        if "feedback" in s["intent"]:
+        if "feedback" in intent:
             return "handle_feedback"
+        # Route to outfit node when:
+        #   a) intent was explicitly classified as outfit_completion, OR
+        #   b) awaiting_outfit_detail is True (follow-up chips after ReAct results)
+        if intent == "outfit_completion" or s.get("awaiting_outfit_detail"):
+            return "outfit_completion_node"
         return "generate_response"
 
     graph.add_conditional_edges(
@@ -2476,6 +2530,7 @@ class ChatService:
         user_preferences: Optional[dict] = None,
         clarification_count: int = 0,
         from_trend: bool = False,
+        outfit_product: Optional[dict] = None,
     ) -> dict:
         """
         Run the conversation through the graph.
@@ -2487,10 +2542,13 @@ class ChatService:
         accumulated_count      = session.get("clarification_count", clarification_count)
         accumulated_dislikes   = session.get("disliked_features", {})
         last_shown_context     = session.get("last_shown", "")
-        last_shown_product     = session.get("last_shown_product", {})   # Full product dict for ReAct
-        last_search_query      = session.get("last_search_query", "")
-        awaiting_outfit_detail = session.get("awaiting_outfit_detail", False)
-        web_search_mode        = session.get("web_search_mode", False)   # Sticky online-only mode
+        last_shown_product       = outfit_product or session.get("last_shown_product", {})
+        last_search_query        = session.get("last_search_query", "")
+        awaiting_outfit_detail   = session.get("awaiting_outfit_detail", False)
+        web_search_mode          = session.get("web_search_mode", False)
+        # outfit_reference_product: locked base garment for the full outfit exchange.
+        # If a new outfit_product is provided, it overrides the stored reference.
+        outfit_reference_product = outfit_product or session.get("outfit_reference_product", {})
 
         initial_state: ChatState = {
             "messages":            messages,
@@ -2517,10 +2575,11 @@ class ChatService:
             "outfit_context":         last_shown_context,
             "last_shown_product":     last_shown_product,
             "last_search_query":      last_search_query,
-            "awaiting_outfit_detail": awaiting_outfit_detail,
-            "web_search_mode":        web_search_mode,
-            "from_trend":             from_trend,
-            "clarification_options":  [],
+            "awaiting_outfit_detail":    awaiting_outfit_detail,
+            "web_search_mode":           web_search_mode,
+            "from_trend":                from_trend,
+            "clarification_options":     [],
+            "outfit_reference_product":  outfit_reference_product,
         }
 
         if self._graph is not None:
@@ -2552,11 +2611,31 @@ class ChatService:
             # Once True, stays True for the whole session thread
             "web_search_mode":        result.get("web_search_mode", False) or session.get("web_search_mode", False),
         }
-        # Remember the last shown products for outfit completion context.
-        # Check local products first, then Serper web results (both carry title/image).
+        # ── Persist outfit_reference_product ──────────────────────────────────
+        # Keeps the original base garment locked for sequential chip messages
+        # (e.g. shoes → then accessories → both for the same kurta).
+        # Clear it only when a brand-new search starts.
+        intent_this_turn = result.get("intent", "")
+        if outfit_product:
+            # New "Complete the Look" click — lock to this product
+            session_update["outfit_reference_product"] = outfit_product
+        elif intent_this_turn in ("new_search", "refine", "marketplace_search"):
+            # New search — clear the locked reference AND exit outfit mode
+            session_update["outfit_reference_product"] = {}
+            session_update["awaiting_outfit_detail"] = False   # exit outfit flow on new search
+        elif "outfit_reference_product" in session:
+            # Preserve across turns (chip follow-ups, etc.)
+            session_update["outfit_reference_product"] = session["outfit_reference_product"]
+
+        # ── Remember last shown products ──────────────────────────────────────
         shown = result.get("products_to_show", [])
         web_res = result.get("web_results", [])
-        if shown:
+        if outfit_product:
+            # User clicked a specific card — lock this as the reference for the whole
+            # outfit completion exchange (both the clarification turn AND the ReAct turn).
+            session_update["last_shown_product"] = outfit_product
+            session_update["last_shown"] = outfit_product.get("title", "")
+        elif shown:
             session_update["last_shown_product"] = shown[0]
             titles = [p.get("title", "") for p in shown[:2] if p.get("title")]
             session_update["last_shown"] = " and ".join(titles)
@@ -2582,6 +2661,7 @@ class ChatService:
             "search_performed": result.get("intent", "") in ("new_search", "refine"),
             "web_search_performed": result.get("web_search_triggered", False),
             "clarification_options": result.get("clarification_options", []),
+            "is_outfit_completion": result.get("intent", "") == "outfit_completion",
         }
 
 

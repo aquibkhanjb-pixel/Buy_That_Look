@@ -23,6 +23,9 @@ from slowapi.errors import RateLimitExceeded
 from app.api import api_router
 from app.config import get_settings
 from app.core.logging import setup_logging, logger
+from app.core.alerts_db import init_alerts_db
+from app.core.scheduler import start_scheduler, stop_scheduler
+from app.db.database import create_tables
 from app.services.llm_service import llm_service
 from app.services.chat_service import chat_service
 from app.services.tryon_service import tryon_service
@@ -62,13 +65,28 @@ async def lifespan(app: FastAPI):
     tryon_service.initialize(settings.hf_token)
     logger.info("Chat service (LangGraph) initialised")
 
+    # Create users / subscriptions tables
+    try:
+        create_tables()
+        logger.info("User/subscription tables ready (PostgreSQL)")
+    except Exception as e:
+        logger.warning(f"User tables unavailable: {e}")
+
+    # Price alerts — ensure table exists, then start daily cron
+    try:
+        init_alerts_db()
+        logger.info("Price alerts table ready (PostgreSQL)")
+        start_scheduler()
+    except Exception as e:
+        logger.warning(f"Price alerts DB/scheduler unavailable: {e} — alerts feature disabled")
+
     logger.info("Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Shutting down application...")
-    # Cleanup resources if needed
+    stop_scheduler()
 
 
 app = FastAPI(

@@ -63,6 +63,20 @@ class Settings(BaseSettings):
     # HuggingFace — Virtual Try-On (IDM-VTON Space)
     hf_token: str = ""
 
+    # Auth — JWT (issued to NextAuth after Google login)
+    jwt_secret: str = ""
+
+    # Razorpay — subscription payments (₹99/mo, Card + UPI + Netbanking)
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_plan_id: str = ""         # plan_xxxx for ₹99/mo plan
+    razorpay_webhook_secret: str = ""
+    frontend_url: str = "http://localhost:3000"
+
+    # Email — Resend.com (price drop alerts)
+    resend_api_key: str = ""
+    resend_from_email: str = "alerts@fashionai.app"
+
     # LangSmith Observability
     langchain_tracing_v2: bool = False
     langchain_api_key: str = ""

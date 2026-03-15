@@ -2,18 +2,39 @@
 
 import json
 import uuid
-from typing import Optional
+from datetime import date
+from typing import Optional, List
 
-from fastapi import APIRouter, Request, File, Form, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, Request, File, Form, UploadFile, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.logging import logger
+from app.db.database import get_db
+from app.db.models import UserUsage, ChatSession, ChatMessage
 from app.schemas.chat import ChatResponse, WebSearchResult
 from app.schemas.search import SearchResult
 from app.services.chat_service import chat_service
 from app.services.llm_service import llm_service
-from typing import List
+
+FREE_CHAT_LIMIT = 15
+
+_optional_bearer = HTTPBearer(auto_error=False)
+
+
+def _get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_optional_bearer),
+) -> Optional[dict]:
+    """Return decoded JWT payload if Bearer token provided, else None."""
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials)
+    except Exception:
+        return None
 
 
 def convert_to_search_results(raw_results: List[dict]) -> List[SearchResult]:
@@ -59,8 +80,12 @@ async def chat(
     user_preferences: Optional[str] = Form(default=None, description="JSON dict of accumulated prefs"),
     clarification_count: int = Form(default=0),
     from_trend: bool = Form(default=False),
+    outfit_product: Optional[str] = Form(default=None, description="JSON product dict to use as outfit reference"),
     # Optional image
     image: Optional[UploadFile] = File(default=None, description="Optional image for visual search"),
+    # Optional auth (for tier-based limits)
+    current_user: Optional[dict] = Depends(_get_optional_user),
+    db: Session = Depends(get_db),
 ):
     """
     AI Fashion Assistant — conversational product discovery.
@@ -77,6 +102,21 @@ async def chat(
     - Updated user_preferences (to send back on next turn)
     """
     cid = conversation_id or str(uuid.uuid4())
+
+    # ── Daily chat limit for free-tier users ──
+    if current_user and current_user.get("tier", "free") != "premium":
+        user_id = current_user["sub"]
+        today = date.today()
+        usage = (
+            db.query(UserUsage)
+            .filter(UserUsage.user_id == user_id, UserUsage.date == today)
+            .first()
+        )
+        if usage and usage.chat_count >= FREE_CHAT_LIMIT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Daily limit reached. Free tier allows {FREE_CHAT_LIMIT} messages per day. Upgrade to Premium for unlimited chat.",
+            )
 
     # ── Parse messages ──
     try:
@@ -125,6 +165,14 @@ async def chat(
         f"type={input_type}, last='{last_msg[:50]}'"
     )
 
+    # ── Parse outfit product (if "Complete the Look" was clicked) ──
+    outfit_product_dict = None
+    if outfit_product:
+        try:
+            outfit_product_dict = json.loads(outfit_product)
+        except Exception:
+            outfit_product_dict = None
+
     result = chat_service.invoke(
         messages=parsed_messages,
         conversation_id=cid,
@@ -134,12 +182,81 @@ async def chat(
         user_preferences=prefs_dict,
         clarification_count=clarification_count,
         from_trend=from_trend,
+        outfit_product=outfit_product_dict,
     )
 
     # ── Convert products to SearchResult schema ──
     products = []
     if result.get("products_to_show"):
         products = convert_to_search_results(result["products_to_show"])
+
+    # ── Increment daily chat count + persist history for premium ──
+    if current_user:
+        user_id = current_user["sub"]
+        today = date.today()
+
+        # Daily usage tracking (all authenticated users)
+        usage = (
+            db.query(UserUsage)
+            .filter(UserUsage.user_id == user_id, UserUsage.date == today)
+            .first()
+        )
+        if usage:
+            usage.chat_count += 1
+        else:
+            db.add(UserUsage(user_id=user_id, date=today, chat_count=1))
+
+        # Chat history persistence (premium users only)
+        if current_user.get("tier") == "premium" and cid:
+            from sqlalchemy import text as _text
+
+            # Build metadata JSON for the assistant message (products + web links + options)
+            meta = {}
+            if result.get("products_to_show"):
+                meta["products"] = result["products_to_show"]
+            if result.get("web_results"):
+                meta["web_results"] = result["web_results"]
+            if result.get("clarification_options"):
+                meta["options"] = result["clarification_options"]
+            meta_json_str = json.dumps(meta) if meta else None
+
+            # Latest user_preferences to restore context on resume
+            prefs_json_str = json.dumps(result.get("user_preferences", {}))
+
+            session_obj = db.query(ChatSession).filter(ChatSession.id == cid).first()
+            if not session_obj:
+                # First turn: create session row
+                title = last_msg[:72].rstrip() + ("…" if len(last_msg) > 72 else "")
+                session_obj = ChatSession(
+                    id=cid,
+                    user_id=user_id,
+                    title=title or "New conversation",
+                    user_preferences_json=prefs_json_str,
+                )
+                db.add(session_obj)
+                db.flush()
+                # Save the user message for this turn
+                db.add(ChatMessage(session_id=cid, role="user", content=last_msg))
+            else:
+                # Subsequent turns: save user message + update preferences + touch updated_at
+                db.add(ChatMessage(session_id=cid, role="user", content=last_msg))
+                db.execute(
+                    _text(
+                        "UPDATE chat_sessions SET updated_at = NOW(), "
+                        "user_preferences_json = :prefs WHERE id = :id"
+                    ),
+                    {"prefs": prefs_json_str, "id": cid},
+                )
+
+            # Save assistant reply with product/link metadata
+            db.add(ChatMessage(
+                session_id=cid,
+                role="assistant",
+                content=result["response"],
+                metadata_json=meta_json_str,
+            ))
+
+        db.commit()
 
     # ── Convert web results to WebSearchResult schema ──
     web_results = []
@@ -159,4 +276,5 @@ async def chat(
         user_preferences=result.get("user_preferences", {}),
         clarification_count=result.get("clarification_count", 0),
         options=result.get("clarification_options", []),
+        is_outfit_completion=result.get("is_outfit_completion", False),
     )

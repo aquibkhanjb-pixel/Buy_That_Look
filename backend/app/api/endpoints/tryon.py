@@ -3,10 +3,11 @@
 import time
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from app.core.auth import require_premium
 from app.core.logging import logger
 from app.schemas.tryon import TryOnResponse
 from app.services.tryon_service import tryon_service
@@ -25,6 +26,7 @@ async def virtual_tryon(
     person_image: UploadFile = File(..., description="Full-body photo of the user"),
     garment_image_url: str = Form(..., description="URL of the product/garment image"),
     garment_description: Optional[str] = Form(default="", description="Short description of the garment"),
+    _user: dict = Depends(require_premium),
 ):
     """
     Virtual Try-On — overlay a recommended garment onto the user's full-body photo.

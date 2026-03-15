@@ -61,6 +61,7 @@ export interface ChatResponse {
   user_preferences: Record<string, unknown>
   clarification_count: number
   options: string[]  // MCQ quick-pick chips for clarification questions
+  is_outfit_completion: boolean  // True when response is outfit completion results
 }
 
 export interface WebSearchResult {

@@ -143,3 +143,5 @@ class ChatResponse(BaseModel):
     clarification_count: int = 0
     # MCQ quick-pick chips shown when bot asks a clarification question
     options: List[str] = []
+    # True when this response contains outfit completion results (hides "Complete the Look" on cards)
+    is_outfit_completion: bool = False

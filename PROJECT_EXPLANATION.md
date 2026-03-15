@@ -241,3 +241,125 @@ After searching shirts (blue/casual), asking for rings used all shirt attributes
 
 ### 6. Virtual Try-On Returning 502
 gradio_client 2.3.0 changed constructor signature from `hf_token=` to `token=`. **Fix**: Updated constructor call.
+
+
+
+
+
+Tier 1 — High Impact, Feasible
+
+  1. Persistent Wardrobe / Wishlist
+  - User saves products they like → "My Wardrobe" tab
+  - Next session: "Based on what you saved, here's what pairs well with it"
+  - This creates lock-in — they won't leave because their data is here
+  - Needs: simple user auth + DB (just a user table + saved_items table)
+
+  2. "Style Profile" Onboarding
+  - First visit: 5-question quiz (body type, style vibe, budget, occasions, favorite colors)
+  - Every search is personalized from day 1
+  - Users feel understood immediately
+  - This is the #1 reason people pay for styling apps (Stitch Fix charges $20/month just for this)
+
+  3. Complete the Look — Shown Automatically
+  - When chat returns products, automatically show: "Complete this look →" button
+  - Currently outfit completion is a separate manual request
+  - Make it a one-click action on every product card
+  - High engagement, drives more Serper queries (which you're already paying for anyway)
+
+  4. Price Drop Alerts
+  - User saves a product → you check price daily → notify by email when price drops
+  - Needs: a simple cron job + email (Resend.com free tier = 3k emails/mo)
+  - This alone can justify a ₹99/mo subscription — Amazon does this and users love it
+
+  ---
+  🟡 Tier 2 — Medium Impact, Worth Planning
+
+  5. "Find This Exact Item" from any image
+  - User pastes any Instagram/Pinterest URL or uploads a screenshot
+  - Bot finds the closest buyable item online
+  - You have image search already — just expose it better with a dedicated flow
+  - Market this as: "Seen it on Instagram? We'll find where to buy it"
+  - This is genuinely unique and solves a real daily problem
+
+  6. Budget Planner / Outfit Builder
+  - "Build me a complete ethnic look under ₹3,000"
+  - Bot assembles: kurta + dupatta + footwear + jewellery — one message, all pieces shown
+  - Total cost shown: "Estimated: ₹2,840"
+  - This is high perceived value — feels like a personal stylist
+
+  7. Occasion-Based Recommendations
+  - "I have a wedding on March 20" → bot remembers the date, reminds 1 week before with curated looks
+  - Needs: very light calendar + notification system
+  - High emotional value — solves real anxiety ("what do I wear to this wedding?")
+
+  8. Size Guidance
+  - User enters their measurements once
+  - For each product: "Based on your measurements, order L on Myntra, M on Ajio (sizing varies)"
+  - Reduces returns anxiety — huge purchase blocker in India
+  - Needs: brand size chart data (can be scraped/curated manually for top 20 brands)
+
+  ---
+  🟠 Tier 3 — Nice to Have Later
+
+  9. Social / Community
+  - "Trending in your city" — show what's popular in Delhi vs Mumbai vs Bangalore
+  - Share an outfit you built → get reactions
+  - Builds organic growth (word of mouth)
+
+  10. Personal Stylist Chat (Premium)
+  - Free tier: AI chat
+  - Paid tier: same AI but with a human stylist reviewing and commenting weekly
+  - Human-in-the-loop = justifies ₹499+/mo easily
+
+  ---
+  What I'd Build First (Prioritized)
+
+  Sprint 1 (Week 1-2): Style Profile Quiz + Persistent Wishlist
+    → Makes every search feel personalized
+    → Creates user lock-in
+    → Needs: Clerk auth + Supabase (free tier — no cost)
+
+  Sprint 2 (Week 3-4): "Find This on Instagram" flow
+    → Unique feature, highly shareable
+    → You already have image search — mostly UI work
+    → Great for viral growth
+
+  Sprint 3 (Week 5-6): Complete the Look (auto, one-click)
+    → Increases time on app significantly
+    → Drives more engagement per session
+
+  Sprint 4 (Week 7-8): Price Alerts + Polish
+    → First real reason to subscribe
+    → Email via Resend.com
+    → Then launch and charge
+
+  ---
+  The Subscription Angle
+
+
+
+
+  🟢 Monetization Paths (realistic)
+
+  Path 1 — Affiliate links (easiest, zero friction)
+  - Flipkart, Amazon, Myntra all have affiliate programs
+  - Replace product URLs with affiliate-tagged URLs
+  - Earn 2–8% commission on purchases
+  - Effort: 1–2 days | Revenue: passive, scales with traffic
+
+  Path 2 — Freemium SaaS
+  - Free: 10 chat queries/day
+  - Paid ₹199–₹499/mo: unlimited searches, try-on feature, outfit completion
+  - Use Razorpay (India) or Stripe for payments
+  - Effort: 1–2 weeks | Revenue: predictable MRR
+
+  Path 3 — B2B API / White-label
+  - Sell the search API to small fashion brands/boutiques
+  - They embed your chat widget on their site
+  - Charge ₹2,000–₹10,000/mo per client
+  - Effort: 2–4 weeks | Revenue: highest per customer
+
+  Path 4 — Instagram/influencer tool
+  - "Find this outfit" — user pastes Instagram image, bot finds where to buy it
+  - This is your image search feature, marketed differently
+  - Monetize via affiliate or ₹99/mo subscription
