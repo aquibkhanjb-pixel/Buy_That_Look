@@ -45,7 +45,9 @@ class Settings(BaseSettings):
 
     # API Settings
     api_prefix: str = "/api/v1"
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # Set CORS_ORIGINS in env as comma-separated URLs, e.g.:
+    # CORS_ORIGINS=https://your-app.vercel.app,http://localhost:3000
+    cors_origins: list[str] = ["http://localhost:3000", "https://*.vercel.app"]
 
     # Rate Limiting
     rate_limit_per_minute: int = 30
