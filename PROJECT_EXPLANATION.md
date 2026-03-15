@@ -363,3 +363,169 @@ Tier 1 — High Impact, Feasible
   - "Find this outfit" — user pastes Instagram image, bot finds where to buy it
   - This is your image search feature, marketed differently
   - Monetize via affiliate or ₹99/mo subscription
+
+
+
+
+
+
+
+
+
+Step 1 — Set up Neon (PostgreSQL)
+
+  1. Go to neon.tech → Create account → New project → name it fashionai
+  2. Copy the connection string — looks like:
+  postgresql://user:pass@ep-xxx-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require
+  3. That becomes your new DATABASE_URL
+
+  ---
+  Step 2 — Deploy Backend on Render
+
+  1. Push your code to GitHub (if not already)
+  2. Go to render.com → New → Web Service → connect your GitHub repo
+  3. Settings:
+    - Root directory: backend
+    - Runtime: Python
+    - Build command: pip install -r requirements.txt
+    - Start command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+  4. Add all Environment Variables (from your .env) in Render's dashboard:
+  DATABASE_URL        = <neon connection string>
+  GEMINI_API_KEY      = ...
+  SERPER_API_KEY      = ...
+  JWT_SECRET          = ...
+  RAZORPAY_KEY_ID     = ...
+  RAZORPAY_KEY_SECRET = ...
+  RAZORPAY_PLAN_ID    = ...
+  RESEND_API_KEY      = ...
+  RESEND_FROM_EMAIL   = ...
+  FRONTEND_URL        = https://your-app.vercel.app   ← fill after step 3
+  5. Deploy → note your backend URL: https://fashionai-backend.onrender.com
+
+  ---
+  Step 3 — Deploy Frontend on Vercel
+
+  1. Go to vercel.com → New Project → import your GitHub repo
+  2. Set Root Directory to frontend
+  3. Add Environment Variables:
+  NEXTAUTH_URL                  = https://your-app.vercel.app
+  NEXTAUTH_SECRET               = <same value>
+  GOOGLE_CLIENT_ID              = <same value>
+  GOOGLE_CLIENT_SECRET          = <same value>
+  BACKEND_URL                   = https://fashionai-backend.onrender.com
+  NEXT_PUBLIC_API_URL           = https://fashionai-backend.onrender.com
+  NEXT_PUBLIC_RAZORPAY_KEY_ID   = rzp_test_...
+  4. Deploy → note your frontend URL: https://your-app.vercel.app
+  5. Go back to Render → update FRONTEND_URL to your Vercel URL → redeploy
+
+  ---
+  Step 4 — Code Changes Required
+
+  4a — CORS in FastAPI (backend/app/main.py)
+
+  Find the CORSMiddleware config and update it:
+
+  # Change from:
+  allow_origins=["http://localhost:3000"]
+
+  # To:
+  allow_origins=[
+      "http://localhost:3000",
+      "https://your-app.vercel.app",    # add your Vercel URL
+  ]
+
+  4b — Google OAuth (Google Cloud Console)
+
+  Go to console.cloud.google.com → Credentials → your OAuth Client ID → add to Authorized redirect URIs:
+  https://your-app.vercel.app/api/auth/callback/google
+  Keep http://localhost:3000/api/auth/callback/google for local dev.
+
+  4c — Razorpay Webhook (if you want it)
+
+  In Razorpay dashboard → Settings → Webhooks → update URL to:
+  https://fashionai-backend.onrender.com/api/v1/payments/webhook
+
+  4d — APScheduler won't run reliably on Render free tier
+
+  Render free tier sleeps after 15 min idle → scheduler stops. Fix using a free external cron:
+
+  1. Go to cron-job.org (free) → create account
+  2. Add a new cron job:
+    - URL: https://fashionai-backend.onrender.com/api/v1/health (just a ping to keep it awake)
+    - Schedule: every 14 minutes (prevents sleeping)
+  3. For the actual price check, add another job:
+    - URL: https://fashionai-backend.onrender.com/api/v1/cron/price-check
+    - Schedule: 0 9 * * * (daily at 9am UTC — adjust for IST if needed)
+
+  That means you also need to add a cron trigger endpoint in the backend:
+
+  # In backend/app/api/endpoints/health.py — add this route
+  @router.post("/cron/price-check")
+  async def trigger_price_check(request: Request):
+      """Called by external cron (cron-job.org) to run daily price checks."""
+      from app.services.price_checker import run_price_checks
+      import asyncio
+      asyncio.get_event_loop().run_in_executor(None, run_price_checks)
+      return {"status": "triggered"}
+
+  ---
+  Step 5 — Neon SSL Connection
+
+  Neon requires SSL. Update backend/app/db/database.py and backend/app/core/alerts_db.py:
+
+  # Both engines need connect_args for SSL when on Neon
+  import os
+
+  ssl_args = {"sslmode": "require"} if "neon.tech" in os.getenv("DATABASE_URL", "") else {}
+
+  engine = create_engine(
+      settings.database_url,
+      pool_pre_ping=True,
+      connect_args=ssl_args,
+  )
+
+  ---
+  Summary of All Changes
+
+  ┌─────────────────────┬────────────────────────────┬─────────────────────────────────────┐
+  │        What         │           Where            │               Change                │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ CORS origins        │ backend/app/main.py        │ Add Vercel URL                      │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ Google OAuth        │ Google Cloud Console       │ Add Vercel redirect URI             │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ DATABASE_URL        │ Render env vars            │ Neon connection string              │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ FRONTEND_URL        │ Render env vars            │ Vercel URL                          │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ BACKEND_URL         │ Vercel env vars            │ Render URL                          │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ NEXTAUTH_URL        │ Vercel env vars            │ Vercel URL                          │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ NEXT_PUBLIC_API_URL │ Vercel env vars            │ Render URL                          │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ SSL for Neon        │ database.py + alerts_db.py │ connect_args={"sslmode":"require"}  │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ APScheduler         │ health.py                  │ Add /cron/price-check POST endpoint │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ Keep-alive ping     │ cron-job.org               │ Ping health every 14 min            │
+  ├─────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ Razorpay webhook    │ Razorpay dashboard         │ Update to Render URL                │
+  └─────────────────────┴────────────────────────────┴─────────────────────────────────────┘
+
+  ---
+  Limitations of Free Tier
+
+  ┌─────────────────────────────────┬────────────────────────────────────────────┬────────────────────────────────────────────────────┐        
+  │              Issue              │                   Impact                   │                     Workaround                     │        
+  ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
+  │ Render sleeps after 15 min idle │ First request ~30s cold start              │ cron-job.org ping every 14 min                     │        
+  ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
+  │ Neon 0.5GB storage              │ ~50k wishlist items or ~500k chat messages │ Fine for demo/portfolio                            │        
+  ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
+  │ Vercel serverless timeout       │ 60s max for API routes                     │ Not an issue (frontend only, backend is on Render) │        
+  ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
+  │ HuggingFace try-on              │ Already external, no change                │ —                                                  │        
+  ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
+  │ Razorpay test mode              │ Payments work but are test only            │ Switch to live when ready                          │        
+  └─────────────────────────────────┴────────────────────────
