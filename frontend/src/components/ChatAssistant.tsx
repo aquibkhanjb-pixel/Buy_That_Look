@@ -61,7 +61,7 @@ const SUGGESTIONS = [
 // ── Source badge ────────────────────────────────────────────────────────────
 
 function SourceBadge({ source }: { source?: string }) {
-  if (source === 'lens') {
+  if (source === 'google_lens') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-medium">
         🔍 Google Lens
@@ -414,10 +414,8 @@ export default function ChatAssistant({ onProductClick, triggerRef, onWishlistTo
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [bubbles])
 
-  useEffect(() => {
-    if (triggerRef) triggerRef.current = (query: string) => sendMessage(query, undefined, true)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Always update triggerRef so trend-card clicks use the latest session/token (not a stale closure)
+  if (triggerRef) triggerRef.current = (query: string) => sendMessage(query, undefined, true)
 
   const startNewChat = useCallback(() => {
     setBubbles([WELCOME])

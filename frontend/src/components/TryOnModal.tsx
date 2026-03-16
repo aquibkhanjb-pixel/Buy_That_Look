@@ -94,6 +94,7 @@ export default function TryOnModal({ garmentImageUrl, garmentTitle, onClose }: T
               <p className="text-sm text-ivory/60">Upgrade to see how clothes look on you before buying.</p>
               <Link
                 href="/pricing"
+                target="_blank"
                 className="inline-block mt-2 bg-gold text-white text-sm font-medium px-6 py-2.5 rounded-xl hover:bg-amber-600 transition-colors"
               >
                 Upgrade to Premium — ₹99/mo
