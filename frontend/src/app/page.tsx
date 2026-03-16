@@ -7,6 +7,7 @@ import TrendAnalyzer from '@/components/TrendAnalyzer'
 import ProductModal from '@/components/ProductModal'
 import WishlistPanel from '@/components/WishlistPanel'
 import FindThisLook from '@/components/FindThisLook'
+import OccasionPlanner from '@/components/OccasionPlanner'
 import { useWishlist } from '@/lib/useWishlist'
 import { Product, SearchResult } from '@/types'
 
@@ -60,6 +61,16 @@ export default function Home() {
             onWishlistToggle={toggle}
             isWishlisted={isWishlisted}
           />
+        )}
+
+        {/* ── Occasion Planner tab ── */}
+        {activeTab === 'occasion' && (
+          <div className="rounded-3xl border border-ivory-dark bg-white shadow-sm p-8">
+            <OccasionPlanner
+              onWishlistToggle={toggle}
+              isWishlisted={isWishlisted}
+            />
+          </div>
         )}
       </div>
 

@@ -529,3 +529,87 @@ Step 1 — Set up Neon (PostgreSQL)
   ├─────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────┤        
   │ Razorpay test mode              │ Payments work but are test only            │ Switch to live when ready                          │        
   └─────────────────────────────────┴────────────────────────
+
+
+
+
+   Tier 1 — High conversion (people will pay for these)                                                                                                                                                                                                                                        
+  1. Dupe Finder                                                                                                                               
+  - User pastes a product URL (e.g. ₹8,000 Zara dress) → AI finds visually similar cheaper alternatives across Myntra, Ajio, Amazon
+  - Massive value prop: saves real money every time
+  - Technically feasible: image from URL → Google Lens search → filter by lower price
+
+  2. AI Style Profile
+  - After a few chats, the bot builds a persistent style profile: body type, preferred colors, occasion needs, budget range, brands
+  liked/disliked
+  - Every recommendation gets more accurate over sessions
+  - Premium-only: "Your stylist remembers you"
+
+  3. Complete Outfit Generator from One Item
+  - User has a kurta → AI builds a full coordinated look: bottom wear, dupatta, footwear, accessories with product links for each piece        
+  - Currently "outfit completion" exists but is basic — a fully visual outfit board would be compelling
+
+  4. Back-in-Stock Alerts
+  - User saves an out-of-stock product → gets email when it's available again
+  - Complements the existing price drop alerts system
+
+  ---
+  Tier 2 — Good retention (keeps people subscribed)
+
+  5. Price History Graph
+  - Show a chart of how a product's price has changed over 30/60/90 days
+  - "Is this actually a sale or always this price?" — huge trust builder
+  - Needs price data accumulation over time (your DB already stores last_price)
+
+  6. Celebrity / Influencer Look Matcher
+  - User uploads an Instagram screenshot → AI finds affordable Indian alternatives
+  - "Get the look for ₹500 instead of ₹5,000"
+  - Extension of Find This Look feature
+
+  7. Occasion Planner
+  - "I have a wedding on Saturday, budget ₹3,000, I'm a guest"
+  - AI generates a complete shopping list with direct buy links
+  - Time-sensitive = high urgency = more engagement
+
+  8. Style Quiz + Onboarding
+  - First-time users take a 5-question quiz (body shape, style, budget, preferred brands, occasions)
+  - Results pre-populate their style profile
+  - Makes the AI feel personal from day one
+
+  ---
+  Tier 3 — Nice to have (engagement features)
+
+  9. Lookbook / Collections
+  - Organize wishlist into named collections: "Office Wear", "Wedding Season", "Gym"
+  - Premium: unlimited collections; free: 2
+
+  10. Budget Tracker
+  - Track total spend across all platforms this month
+  - Set monthly fashion budget → get warned when approaching limit
+
+  11. Trend Alerts (Personalized)
+  - Weekly email/notification: "3 new trends matching your style this week"
+  - Based on their style profile + current trends
+
+  ---
+  My Recommendation — What to build next
+
+  Given your current stack (Gemini + Serper + existing DB), the easiest wins with highest subscription impact:
+
+  ┌──────────┬──────────────────────┬────────┬───────────┐
+  │ Priority │       Feature        │ Effort │  Impact   │
+  ├──────────┼──────────────────────┼────────┼───────────┤
+  │ 1        │ Dupe Finder          │ Medium │ Very High │
+  ├──────────┼──────────────────────┼────────┼───────────┤
+  │ 2        │ AI Style Profile     │ Medium │ Very High │
+  ├──────────┼──────────────────────┼────────┼───────────┤
+  │ 3        │ Back-in-Stock Alerts │ Low    │ High      │
+  ├──────────┼──────────────────────┼────────┼───────────┤
+  │ 4        │ Occasion Planner     │ Low    │ High      │
+  ├──────────┼──────────────────────┼────────┼───────────┤
+  │ 5        │ Price History Graph  │ Medium │ Medium    │
+  └──────────┴──────────────────────┴────────┴───────────┘
+
+  Dupe Finder alone could be the killer feature — it directly saves users money, so the ₹99/month subscription pays for itself after one use.  
+
+  Want me to start building any of these?

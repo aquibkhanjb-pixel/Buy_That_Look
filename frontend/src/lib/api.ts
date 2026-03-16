@@ -283,6 +283,118 @@ export async function deleteChatSession(backendToken: string, sessionId: string)
   await api.delete(`/chat/history/${sessionId}`, { headers: authHeader(backendToken) })
 }
 
+// ── Occasion Planner ──────────────────────────────────────────────────────────
+
+export interface OccasionCategory {
+  id: string
+  label: string
+  sublabel: string
+  emoji: string
+  budget_pct: number
+  default: boolean
+}
+
+export interface OccasionContext {
+  occasion_type: string
+  party_subtype: string
+  gender: string
+  budget: number
+  role: string
+  style: string
+  formality: string
+  special_notes: string
+  original_description: string
+}
+
+export interface OutfitPiece {
+  category_id: string
+  category_label: string
+  title: string
+  url: string
+  price: string
+  price_num: number
+  image_url: string
+  source_site: string
+  rating?: number
+  budget: number
+}
+
+export interface CompatibilityEdge {
+  a: string
+  a_label: string
+  b: string
+  b_label: string
+  score: number       // 0=incompatible, 1=neutral, 2=compatible
+  reason: string
+}
+
+export interface CompatibilityConflict {
+  piece_a_id: string
+  piece_b_id: string
+  piece_a_label: string
+  piece_b_label: string
+  reason: string
+  suggestion: string
+}
+
+export interface OccasionPlanResponse {
+  pieces: OutfitPiece[]
+  total_price: number
+  budget: number
+  outfit_story: string
+  compatibility_graph: CompatibilityEdge[]
+  conflicts: { has_conflicts: boolean; conflicts: CompatibilityConflict[] } | null
+}
+
+export async function getOccasionCategories(
+  description: string,
+  backendToken?: string,
+): Promise<{ context: OccasionContext; categories: OccasionCategory[] }> {
+  const headers = backendToken ? authHeader(backendToken) : {}
+  const response = await api.post('/occasion/categories', { description }, { headers, timeout: 30000 })
+  return response.data
+}
+
+export async function planOccasionOutfit(
+  context: OccasionContext,
+  selectedIds: string[],
+  customItems: string[],
+  brandTier: string,
+  backendToken?: string,
+): Promise<OccasionPlanResponse> {
+  const headers = backendToken ? authHeader(backendToken) : {}
+  const response = await api.post(
+    '/occasion/plan',
+    { context, selected_ids: selectedIds, custom_items: customItems, brand_tier: brandTier },
+    { headers, timeout: 120000 },
+  )
+  return response.data
+}
+
+export async function swapOccasionPiece(
+  context: OccasionContext,
+  categoryId: string,
+  categoryLabel: string,
+  budget: number,
+  lockedPieces: OutfitPiece[],
+  brandTier: string,
+  userHint: string,
+  customLabel?: string,
+  backendToken?: string,
+): Promise<{ piece: OutfitPiece; conflicts: { has_conflicts: boolean; conflicts: CompatibilityConflict[] } | null; compatibility_graph: CompatibilityEdge[] }> {
+  const headers = backendToken ? authHeader(backendToken) : {}
+  const response = await api.post(
+    '/occasion/swap',
+    {
+      context, category_id: categoryId, category_label: categoryLabel,
+      budget, locked_pieces: lockedPieces, custom_label: customLabel,
+      brand_tier: brandTier, user_hint: userHint,
+    },
+    { headers, timeout: 120000 },
+  )
+  return response.data
+}
+
 // ── Find This Look ───────────────────────────────────────────────────────────
 
 export async function findThisLook(options: {

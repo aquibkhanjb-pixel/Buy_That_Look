@@ -3,7 +3,7 @@
 import { Heart } from 'lucide-react'
 import UserMenu from '@/components/UserMenu'
 
-export type ActiveTab = 'discover' | 'findlook'
+export type ActiveTab = 'discover' | 'findlook' | 'occasion'
 
 interface HeaderProps {
   activeTab: ActiveTab
@@ -13,8 +13,9 @@ interface HeaderProps {
 }
 
 const TABS: { id: ActiveTab; label: string }[] = [
-  { id: 'discover',  label: 'Discover'       },
-  { id: 'findlook',  label: 'Find This Look'  },
+  { id: 'discover',  label: 'Discover'         },
+  { id: 'findlook',  label: 'Find This Look'    },
+  { id: 'occasion',  label: 'Occasion Planner'  },
 ]
 
 export default function Header({
