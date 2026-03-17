@@ -23,7 +23,7 @@ settings = get_settings()
 
 _JUDGE_MODEL    = "gemini-2.5-flash"
 _EXTRACT_MODEL  = "gemini-2.5-flash"
-_MAX_JUDGE_ITERS = 3
+_MAX_JUDGE_ITERS = 2   # 3 iters + gap detection + redistribution exceeds 120s timeout
 _SEARCH_TIMEOUT  = 12
 _IMAGE_TIMEOUT   = 4
 _N_SWAP_CANDIDATES = 3
@@ -81,6 +81,14 @@ OCCASION_CATEGORIES: Dict[str, Dict[str, List[dict]]] = {
             {"id": "earrings", "label": "Earrings",            "sublabel": "Dainty hoops / pearl drops / studs",    "emoji": "✨", "budget_pct": 0.12, "default": True},
             {"id": "bag",      "label": "Bag",                 "sublabel": "Mini bag / sling / shoulder bag",       "emoji": "👜", "budget_pct": 0.12, "default": True},
         ],
+        "festival": [
+            {"id": "outfit",   "label": "Ethnic Outfit",       "sublabel": "Salwar Kameez / Anarkali / Sharara",    "emoji": "👗", "budget_pct": 0.42, "default": True},
+            {"id": "footwear", "label": "Footwear",            "sublabel": "Juttis / Block heels / Kolhapuri",      "emoji": "👡", "budget_pct": 0.22, "default": True},
+            {"id": "earrings", "label": "Earrings / Jewellery","sublabel": "Jhumkas / Chandbali / Oxidised set",    "emoji": "💍", "budget_pct": 0.15, "default": True},
+            {"id": "bangles",  "label": "Bangles / Bracelet",  "sublabel": "Ethnic bangles / Kade / Chooda",        "emoji": "✨", "budget_pct": 0.10, "default": True},
+            {"id": "clutch",   "label": "Clutch / Potli",      "sublabel": "Embroidered potli / festive clutch",    "emoji": "👜", "budget_pct": 0.07, "default": False},
+            {"id": "dupatta",  "label": "Dupatta",             "sublabel": "Phulkari / Chiffon / Silk dupatta",     "emoji": "🧣", "budget_pct": 0.04, "default": False},
+        ],
         "casual": [
             {"id": "top",      "label": "Top",                 "sublabel": "T-shirt / Crop top / Casual kurti",     "emoji": "👕", "budget_pct": 0.30, "default": True},
             {"id": "bottom",   "label": "Bottom",              "sublabel": "Jeans / Palazzos / Skirt / Shorts",     "emoji": "👖", "budget_pct": 0.30, "default": True},
@@ -89,6 +97,12 @@ OCCASION_CATEGORIES: Dict[str, Dict[str, List[dict]]] = {
         ],
     },
     "men": {
+        "festival": [
+            {"id": "outfit",   "label": "Ethnic Outfit",       "sublabel": "Kurta Pajama / Pathani / Nehru Jacket", "emoji": "👘", "budget_pct": 0.54, "default": True},
+            {"id": "footwear", "label": "Footwear",            "sublabel": "Mojari / Kolhapuri / Ethnic sandals",   "emoji": "👞", "budget_pct": 0.28, "default": True},
+            {"id": "watch",    "label": "Watch",               "sublabel": "Ethnic / casual watch",                 "emoji": "⌚", "budget_pct": 0.10, "default": False},
+            {"id": "dupatta",  "label": "Dupatta / Stole",     "sublabel": "Light silk stole / pocket square",      "emoji": "🧣", "budget_pct": 0.08, "default": False},
+        ],
         "wedding": [
             {"id": "outfit",   "label": "Ethnic Outfit",       "sublabel": "Kurta Set / Sherwani / Indo-Western",   "emoji": "👘", "budget_pct": 0.52, "default": True},
             {"id": "footwear", "label": "Footwear",            "sublabel": "Mojari / Kolhapuri / Ethnic Loafers",   "emoji": "👞", "budget_pct": 0.26, "default": True},
@@ -118,16 +132,27 @@ OCCASION_CATEGORIES: Dict[str, Dict[str, List[dict]]] = {
 }
 
 _OCCASION_TYPE_MAP = {
+    # Weddings & ceremonies
     "wedding": "wedding", "marriage": "wedding", "shaadi": "wedding",
     "mehendi": "wedding", "sangeet": "wedding",  "reception": "wedding",
-    "engagement": "wedding", "festival": "wedding", "puja": "wedding",
-    "diwali": "wedding", "eid": "wedding", "navratri": "wedding",
+    "engagement": "wedding",
+    # Festivals (separate from wedding — ethnic but less formal)
+    "festival": "festival", "puja": "festival", "pooja": "festival",
+    "diwali": "festival",   "eid": "festival",   "navratri": "festival",
+    "holi": "festival",     "durga": "festival", "ganesh": "festival",
+    "onam": "festival",     "pongal": "festival","baisakhi": "festival",
+    "raksha": "festival",   "karwa": "festival", "teej": "festival",
+    "christmas": "festival","new year": "festival",
+    # Parties
     "party": "party", "birthday": "party", "cocktail": "party",
     "club": "party", "dinner": "party", "nightout": "party",
     "farewell": "party", "anniversary": "party", "reunion": "party",
+    # Work
     "office": "office", "work": "office", "interview": "office",
     "meeting": "office", "corporate": "office",
+    # Date
     "date": "date", "romantic": "date",
+    # Casual
     "casual": "casual", "outing": "casual", "trip": "casual",
     "brunch": "casual", "mall": "casual",
 }
@@ -249,7 +274,7 @@ Description: "{description}"
 
 Return ONLY a JSON object:
 {{
-  "occasion_type": "wedding|party|office|date|casual",
+  "occasion_type": "wedding|festival|party|office|date|casual",
   "party_subtype": "birthday|farewell|anniversary|friends|cocktail|reunion|other",
   "gender": "women|men",
   "budget": <number in INR, default 3000>,
@@ -260,13 +285,19 @@ Return ONLY a JSON object:
 }}
 Rules:
 - budget = extract number from "₹4000", "4k", "four thousand" etc. Default 3000.
-- Style: infer from occasion if not stated (wedding→ethnic, office→formal, party→western).
-- party_subtype: only fill if occasion_type is "party". Examples: farewell=farewell, birthday=birthday, anniversary=anniversary, "party with friends"=friends, cocktail=cocktail. Otherwise use "other".
-- If occasion is NOT party, set party_subtype to "other"."""
+- occasion_type rules:
+    * wedding = actual wedding ceremonies (shaadi, mehendi, sangeet, reception, engagement)
+    * festival = Indian/religious festivals (Eid, Diwali, Navratri, Holi, Durga Puja, Onam, Christmas, New Year, Baisakhi, Karwa Chauth, Teej, Ganesh Chaturthi, Pongal, Raksha Bandhan)
+    * party = birthday, farewell, anniversary, cocktail, nightout, dinner party
+    * office = work, meeting, interview, corporate
+    * date = romantic outing
+    * casual = mall, trip, brunch, everyday outing
+- Style: infer from occasion if not stated (wedding→ethnic, festival→ethnic, office→formal, party→western, casual→casual).
+- party_subtype: only fill if occasion_type is exactly "party". Otherwise use "other"."""
 
     ctx = _parse_json(_call_gemini(prompt))
 
-    if ctx.get("occasion_type") not in {"wedding", "party", "office", "date", "casual"}:
+    if ctx.get("occasion_type") not in {"wedding", "festival", "party", "office", "date", "casual"}:
         ctx["occasion_type"] = _detect_occasion_type(description)
     if ctx.get("gender") not in {"women", "men"}:
         ctx["gender"] = "women"
@@ -276,8 +307,14 @@ Rules:
         ctx["budget"] = 3000.0
 
     ctx.setdefault("role", "guest")
-    ctx.setdefault("style", "ethnic" if ctx["occasion_type"] == "wedding" else "casual")
-    ctx.setdefault("formality", "high" if ctx["occasion_type"] in {"wedding", "office"} else "medium")
+    ctx.setdefault("style",
+        "ethnic" if ctx["occasion_type"] in {"wedding", "festival"} else
+        "formal" if ctx["occasion_type"] == "office" else "casual"
+    )
+    ctx.setdefault("formality",
+        "high"   if ctx["occasion_type"] in {"wedding", "office"} else
+        "medium" if ctx["occasion_type"] in {"festival", "party"} else "casual"
+    )
     ctx.setdefault("special_notes", "")
     ctx.setdefault("party_subtype", "other")
     # Validate party_subtype
@@ -419,19 +456,24 @@ def _build_query(category_id: str, category_label: str, context: dict,
         return f"{gender} {custom_label} {occasion_terms} {style} {color_hint} {tier_terms}".strip()
 
     templates = {
-        "outfit":   f"{gender} {style} outfit {occasion_terms} {color_hint} {tier_terms}",
-        "footwear": f"{gender} {occasion_terms} footwear {style} {color_hint} {tier_terms}",
-        "earrings": f"women earrings jewellery {occasion_terms} {style} {color_hint} {tier_terms}",
-        "clutch":   f"women clutch bag potli {occasion_terms} {style} {color_hint} {tier_terms}",
-        "dupatta":  f"women dupatta stole {style} {color_hint} {tier_terms}",
-        "bangles":  f"women bangles {occasion_terms} {style} {color_hint} {tier_terms}",
-        "watch":    f"{gender} watch {formality} {color_hint} {tier_terms}",
-        "belt":     f"men leather belt {formality} {color_hint} {tier_terms}",
-        "tie":      f"men tie pocket square {formality} {color_hint} {tier_terms}",
-        "cap":      f"men cap sunglasses casual {color_hint} {tier_terms}",
-        "top":      f"{gender} top {style} casual {color_hint} {tier_terms}",
-        "bottom":   f"{gender} bottom {style} casual {color_hint} {tier_terms}",
-        "bag":      f"{gender} bag {occasion_terms} {style} {color_hint} {tier_terms}",
+        "outfit":        f"{gender} {style} outfit {occasion_terms} {color_hint} {tier_terms}",
+        "footwear":      f"{gender} {occasion_terms} footwear {style} {color_hint} {tier_terms}",
+        "earrings":      f"women earrings jewellery {occasion_terms} {style} {color_hint} {tier_terms}",
+        "clutch":        f"women clutch bag potli {occasion_terms} {style} {color_hint} {tier_terms}",
+        "dupatta":       f"women dupatta stole {style} {color_hint} {tier_terms}",
+        "bangles":       f"women bangles {occasion_terms} {style} {color_hint} {tier_terms}",
+        "watch":         f"{gender} watch {formality} {color_hint} {tier_terms}",
+        "belt":          f"men leather belt {formality} {color_hint} {tier_terms}",
+        "tie":           f"men tie pocket square {formality} {color_hint} {tier_terms}",
+        "cap":           f"men cap sunglasses casual {color_hint} {tier_terms}",
+        "top":           f"{gender} shirt top {occasion_terms} {style} {color_hint} {tier_terms}",
+        "bottom":        f"{gender} trousers pants {occasion_terms} {style} {color_hint} {tier_terms}",
+        "bag":           f"{gender} bag {occasion_terms} {style} {color_hint} {tier_terms}",
+        # split-outfit specific IDs
+        "top_shirt":     f"{gender} shirt {occasion_terms} {style} {color_hint} {tier_terms}",
+        "top_kurta":     f"{gender} kurta {occasion_terms} {style} {color_hint} {tier_terms}",
+        "bottom_trouser":f"{gender} trousers {occasion_terms} {style} {color_hint} {tier_terms}",
+        "bottom_pajama": f"{gender} pajama churidar {occasion_terms} {style} {color_hint} {tier_terms}",
     }
     return templates.get(category_id,
         f"{gender} {category_label} {occasion_terms} {style} {color_hint} {tier_terms}").strip()
@@ -722,14 +764,19 @@ def _judge_outfit_global(pieces: List[dict], context: dict) -> dict:
 
 def react_judge_loop(pieces: List[dict], context: dict,
                      brand_tier: str = "midrange") -> List[dict]:
-    if len(pieces) <= 1:
+    # Skip judging for very small outfits — not enough pairs to be meaningful
+    if len(pieces) < 2:
         return pieces
 
     current = list(pieces)
 
     for iteration in range(_MAX_JUDGE_ITERS):
         logger.info(f"ReAct iteration {iteration+1}/{_MAX_JUDGE_ITERS}")
-        judgment = _judge_outfit_global(current, context)
+        try:
+            judgment = _judge_outfit_global(current, context)
+        except Exception as exc:
+            logger.warning(f"ReAct judge failed (iter {iteration+1}): {exc} — keeping current outfit")
+            break
 
         if judgment["overall"] == "good":
             logger.info("Judge accepted outfit ✓")
@@ -748,11 +795,16 @@ def react_judge_loop(pieces: List[dict], context: dict,
             locked = [p for i, p in enumerate(current) if i != idx]
             logger.info(f"Replacing [{old['category_label']}]: {pj.get('reason','')}")
 
-            new_piece = _search_one(
-                cat_id, old["category_label"], old["budget"],
-                context, locked_pieces=locked,
-                brand_tier=brand_tier, n_candidates=_N_SWAP_CANDIDATES,
-            )
+            try:
+                new_piece = _search_one(
+                    cat_id, old["category_label"], old["budget"],
+                    context, locked_pieces=locked,
+                    brand_tier=brand_tier, n_candidates=_N_SWAP_CANDIDATES,
+                )
+            except Exception as exc:
+                logger.warning(f"ReAct search failed for [{old['category_label']}]: {exc}")
+                continue
+
             if new_piece:
                 current[idx] = new_piece
                 replaced = True
@@ -785,6 +837,73 @@ Pieces: {pieces_text}
 Explain why this outfit works for the specific occasion vibe, mention colour harmony, end with a styling tip. Conversational and warm. No markdown."""
     story = _call_gemini(prompt)
     return story or f"A curated {context.get('style','ethnic')} outfit perfect for {occasion_desc}."
+
+
+# ── Outfit Category Expansion ────────────────────────────────────────────────
+
+# For non-wedding occasions where "outfit" typically means separates,
+# split the single "outfit" category into top + bottom to avoid getting
+# only a shirt or only trousers in one search.
+_OUTFIT_SPLIT: Dict[str, Dict[str, dict]] = {
+    "men": {
+        "party":  {
+            "top":    {"id": "top_shirt",      "label": "Shirt / Blazer",         "pct": 0.55},
+            "bottom": {"id": "bottom_trouser",  "label": "Trousers / Formal Pants", "pct": 0.45},
+        },
+        "office": {
+            "top":    {"id": "top_shirt",      "label": "Formal Shirt / Blazer",   "pct": 0.55},
+            "bottom": {"id": "bottom_trouser",  "label": "Formal Trousers",          "pct": 0.45},
+        },
+        "casual": {
+            "top":    {"id": "top_shirt",      "label": "Casual Shirt / T-Shirt",  "pct": 0.50},
+            "bottom": {"id": "bottom_trouser",  "label": "Jeans / Chinos",           "pct": 0.50},
+        },
+        "date": {
+            "top":    {"id": "top_shirt",      "label": "Smart Casual Shirt",      "pct": 0.55},
+            "bottom": {"id": "bottom_trouser",  "label": "Trousers / Dark Jeans",   "pct": 0.45},
+        },
+        "wedding": {
+            "top":    {"id": "top_kurta",      "label": "Kurta / Sherwani",        "pct": 0.60},
+            "bottom": {"id": "bottom_pajama",   "label": "Churidar / Pajama",        "pct": 0.40},
+        },
+    },
+    "women": {
+        # Women's party can be a dress (single item) — only split for casual/office separates
+        "casual": {
+            "top":    {"id": "top_shirt",      "label": "Top / Kurti",             "pct": 0.50},
+            "bottom": {"id": "bottom_trouser",  "label": "Pants / Skirt",            "pct": 0.50},
+        },
+        "office": {
+            "top":    {"id": "top_shirt",      "label": "Formal Top / Blazer",     "pct": 0.55},
+            "bottom": {"id": "bottom_trouser",  "label": "Formal Trousers / Skirt", "pct": 0.45},
+        },
+    },
+}
+
+
+def _expand_outfit_tasks(category_id: str, label: str, budget: float,
+                          context: dict) -> List[tuple]:
+    """
+    If this is an 'outfit' category for an occasion where separates make sense,
+    split it into two tasks: top + bottom. Otherwise return as-is.
+    Each task tuple: (category_id, label, budget, is_custom, custom_label)
+    """
+    if category_id != "outfit":
+        return [(category_id, label, budget, False, None)]
+
+    gender  = context.get("gender", "women")
+    occasion = context.get("occasion_type", "casual")
+
+    split = _OUTFIT_SPLIT.get(gender, {}).get(occasion)
+    if not split:
+        return [(category_id, label, budget, False, None)]
+
+    top_def    = split["top"]
+    bottom_def = split["bottom"]
+    return [
+        (top_def["id"],    top_def["label"],    round(budget * top_def["pct"]),    False, None),
+        (bottom_def["id"], bottom_def["label"],  round(budget * bottom_def["pct"]), False, None),
+    ]
 
 
 # ── Budget Redistribution ─────────────────────────────────────────────────────
@@ -972,7 +1091,10 @@ def build_outfit(context: dict, selected_ids: List[str],
     tasks = []
     for cid in selected_ids:
         if cid in cat_map:
-            tasks.append((cid, cat_map[cid]["label"], budgets.get(cid, 500), False, None))
+            expanded = _expand_outfit_tasks(
+                cid, cat_map[cid]["label"], budgets.get(cid, 500), context
+            )
+            tasks.extend(expanded)
     for item in custom_items:
         key = f"custom_{item.strip().lower().replace(' ', '_')}"
         tasks.append((key, item.strip().title(), budgets.get(key, 400), True, item.strip()))
@@ -1076,12 +1198,35 @@ def swap_piece(category_id: str, category_label: str, budget: float,
     )
 
     if not new_piece:
-        return {"piece": None, "conflicts": None, "compatibility_graph": []}
+        return {"piece": None, "conflicts": None, "compatibility_graph": [], "gap_pieces": []}
 
-    # Build graph once on full post-swap outfit — extract conflicts AND serialise for UI
     full_outfit = locked_pieces + [new_piece]
-    graph = build_compatibility_graph(full_outfit, context, use_images=False)
-    conflicts   = _conflicts_from_graph(full_outfit, graph)
-    graph_list  = _serialize_graph(full_outfit, graph)
 
-    return {"piece": new_piece, "conflicts": conflicts, "compatibility_graph": graph_list}
+    # Detect any essential pieces now missing after this swap
+    # (e.g. user swapped a shirt+trouser set → now only shirt, need trousers)
+    effective_budget = (
+        context.get("budget", 3000)
+        * BRAND_TIERS.get(brand_tier, BRAND_TIERS["midrange"])["price_factor"]
+    )
+    enriched_outfit = _detect_and_fill_gaps(full_outfit, context, brand_tier, effective_budget)
+    gap_pieces = [
+        p for p in enriched_outfit
+        if p["category_id"] not in {fp["category_id"] for fp in full_outfit}
+    ]
+    if gap_pieces:
+        logger.info(f"Swap gap-fill: {len(gap_pieces)} new piece(s) added — "
+                    f"{[p['category_label'] for p in gap_pieces]}")
+
+    final_outfit = full_outfit + gap_pieces
+
+    # Build graph on the complete post-swap outfit
+    graph      = build_compatibility_graph(final_outfit, context, use_images=False)
+    conflicts  = _conflicts_from_graph(final_outfit, graph)
+    graph_list = _serialize_graph(final_outfit, graph)
+
+    return {
+        "piece":              new_piece,
+        "gap_pieces":         gap_pieces,
+        "conflicts":          conflicts,
+        "compatibility_graph": graph_list,
+    }

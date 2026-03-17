@@ -366,7 +366,7 @@ export async function planOccasionOutfit(
   const response = await api.post(
     '/occasion/plan',
     { context, selected_ids: selectedIds, custom_items: customItems, brand_tier: brandTier },
-    { headers, timeout: 120000 },
+    { headers, timeout: 180000 },
   )
   return response.data
 }
@@ -381,7 +381,7 @@ export async function swapOccasionPiece(
   userHint: string,
   customLabel?: string,
   backendToken?: string,
-): Promise<{ piece: OutfitPiece; conflicts: { has_conflicts: boolean; conflicts: CompatibilityConflict[] } | null; compatibility_graph: CompatibilityEdge[] }> {
+): Promise<{ piece: OutfitPiece; gap_pieces: OutfitPiece[]; conflicts: { has_conflicts: boolean; conflicts: CompatibilityConflict[] } | null; compatibility_graph: CompatibilityEdge[] }> {
   const headers = backendToken ? authHeader(backendToken) : {}
   const response = await api.post(
     '/occasion/swap',

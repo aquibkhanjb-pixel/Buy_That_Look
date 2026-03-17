@@ -311,7 +311,15 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
       )
       setOutfit(prev => {
         if (!prev) return prev
-        const pieces = prev.pieces.map(p => p.category_id === piece.category_id ? data.piece : p)
+        // Replace swapped piece, then append any gap pieces that were auto-added
+        let pieces = prev.pieces.map(p =>
+          p.category_id === piece.category_id ? data.piece : p
+        )
+        // Add newly detected gap pieces (e.g. trousers added when only shirt was swapped in)
+        const existingIds = new Set(pieces.map(p => p.category_id))
+        const newGaps = (data.gap_pieces ?? []).filter(g => !existingIds.has(g.category_id))
+        if (newGaps.length > 0) pieces = [...pieces, ...newGaps]
+
         return {
           ...prev,
           pieces,
@@ -409,6 +417,8 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
           <p className="text-xs text-noir/50 mt-0.5 capitalize">
             {context?.occasion_type === 'party' && context?.party_subtype && context.party_subtype !== 'other'
               ? `${context.party_subtype} party`
+              : context?.occasion_type === 'festival'
+              ? `${context.special_notes?.split(' ')[0] || 'Festival'} · ethnic`
               : context?.occasion_type
             } · {context?.gender} · {context?.role} ·{' '}
             <span className="font-medium">{brandTier}</span> tier
@@ -491,7 +501,7 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
           {context.occasion_type === 'party' && context.party_subtype && context.party_subtype !== 'other'
             ? `${context.party_subtype} party`
             : context.occasion_type
-          } · {context.gender} · Budget ₹{context.budget.toLocaleString('en-IN')}
+          } · {context.gender} · ₹{context.budget.toLocaleString('en-IN')}
         </p>
       </div>
 
@@ -608,10 +618,12 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
 
       <div className="flex flex-wrap gap-2 justify-center">
         {[
-          "Cousin's wedding Saturday, I'm a guest, ₹4000, women",
-          "Office presentation tomorrow, men, ₹3000",
-          "Birthday dinner, women, ₹2500",
+          "Cousin's wedding, guest, ₹4000, women",
+          "Office presentation, men, ₹3000",
+          "Friend's birthday party, women, ₹2500",
+          "Eid celebration, men, ₹3500",
           "Diwali family gathering, women, ₹5000",
+          "Farewell party for colleague, men, ₹2000",
         ].map(ex => (
           <button
             key={ex}
