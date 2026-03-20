@@ -24,13 +24,16 @@ export const authOptions: NextAuthOptions = {
               name:       token.name,
               avatar_url: token.picture,
             }),
+            signal: AbortSignal.timeout(10_000), // 10s — fail fast if Render is cold-starting
           })
           if (res.ok) {
             const data = await res.json()
             token.backendToken = data.access_token
             token.tier         = data.tier
+            token.isAdmin      = data.is_admin ?? false
           }
         } catch (e) {
+          // Backend timeout or unreachable — user still signs in, features degrade gracefully
           console.error('[NextAuth] Backend sync failed:', e)
         }
       }
@@ -40,6 +43,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       session.backendToken  = (token.backendToken as string) ?? ''
       session.user.tier     = (token.tier as string) ?? 'free'
+      session.user.isAdmin  = (token.isAdmin as boolean) ?? false
       return session
     },
   },

@@ -30,9 +30,16 @@ def get_db():
 def create_tables() -> None:
     """Create all ORM-managed tables if they don't exist, and run column migrations."""
     Base.metadata.create_all(bind=engine)
-    # Add occasion_count to user_usage if it was created before this column existed
-    with engine.connect() as conn:
-        conn.execute(text(
-            "ALTER TABLE user_usage ADD COLUMN IF NOT EXISTS occasion_count INTEGER NOT NULL DEFAULT 0"
-        ))
-        conn.commit()
+    # Column migrations — wrapped in try/except so startup is never blocked
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE user_usage ADD COLUMN IF NOT EXISTS occasion_count INTEGER NOT NULL DEFAULT 0"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+    except Exception as e:
+        import logging
+        logging.warning(f"[DB migration] Non-fatal error: {e}")

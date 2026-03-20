@@ -411,3 +411,73 @@ export async function findThisLook(options: {
   })
   return response.data
 }
+
+// ── Admin ────────────────────────────────────────────────────────────────────
+
+export async function getAdminStats(token: string) {
+  const response = await api.get('/admin/stats', { headers: authHeader(token) })
+  return response.data
+}
+
+export async function getAdminUsers(
+  token: string,
+  params: { page?: number; limit?: number; search?: string; tier?: string } = {}
+) {
+  const response = await api.get('/admin/users', {
+    headers: authHeader(token),
+    params,
+  })
+  return response.data
+}
+
+export async function updateUserTier(token: string, userId: string, tier: string) {
+  const response = await api.patch(
+    `/admin/users/${userId}/tier`,
+    { tier },
+    { headers: authHeader(token) }
+  )
+  return response.data
+}
+
+export async function deleteUser(token: string, userId: string) {
+  const response = await api.delete(`/admin/users/${userId}`, {
+    headers: authHeader(token),
+  })
+  return response.data
+}
+
+export async function updateUserAdmin(token: string, userId: string, isAdmin: boolean) {
+  const response = await api.patch(
+    `/admin/users/${userId}/admin`,
+    { is_admin: isAdmin },
+    { headers: authHeader(token) }
+  )
+  return response.data
+}
+
+export async function getAdminGrowth(token: string, days = 30) {
+  const response = await api.get('/admin/growth', {
+    headers: authHeader(token),
+    params: { days },
+  })
+  return response.data as { date: string; count: number }[]
+}
+
+export async function getAdminAlerts(
+  token: string,
+  params: { page?: number; limit?: number } = {}
+) {
+  const response = await api.get('/admin/alerts', {
+    headers: authHeader(token),
+    params,
+  })
+  return response.data
+}
+
+export async function deleteAdminAlert(token: string, alertId: number) {
+  const response = await api.delete(`/admin/alerts/${alertId}`, {
+    headers: authHeader(token),
+  })
+  return response.data
+}
+

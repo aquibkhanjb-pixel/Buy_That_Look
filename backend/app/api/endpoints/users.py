@@ -24,23 +24,36 @@ def sync_user(body: UserSyncRequest, db: Session = Depends(get_db)):
     Creates the user if this is their first visit.
     Returns a signed backend JWT and the user's tier.
     """
+    from app.config import get_settings
+    settings = get_settings()
+
     user = db.query(User).filter(User.email == str(body.email)).first()
+    is_admin = str(body.email) in settings.admin_email_list
+
     if not user:
         user = User(
             email=str(body.email),
             name=body.name,
             avatar_url=body.avatar_url,
+            is_admin=is_admin,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
+    elif is_admin and not user.is_admin:
+        # Email is in ADMIN_EMAILS but DB flag is off → grant admin
+        user.is_admin = True
+        db.commit()
+    # Note: we do NOT revoke is_admin here — admins promoted via the dashboard
+    # keep their status even if not listed in ADMIN_EMAILS.
 
     token = create_access_token(
         user_id=str(user.id),
         email=user.email,
         tier=user.tier,
+        is_admin=user.is_admin,
     )
-    return {"access_token": token, "tier": user.tier, "user_id": str(user.id)}
+    return {"access_token": token, "tier": user.tier, "user_id": str(user.id), "is_admin": user.is_admin}
 
 
 @router.get("/me")

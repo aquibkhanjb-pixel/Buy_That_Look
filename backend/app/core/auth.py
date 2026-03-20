@@ -25,14 +25,15 @@ _ACCESS_TOKEN_DAYS    = 30
 _security             = HTTPBearer(auto_error=True)
 
 
-def create_access_token(user_id: str, email: str, tier: str) -> str:
+def create_access_token(user_id: str, email: str, tier: str, is_admin: bool = False) -> str:
     """Mint a signed JWT valid for 30 days."""
     expire = datetime.utcnow() + timedelta(days=_ACCESS_TOKEN_DAYS)
     payload = {
-        "sub":   user_id,
-        "email": email,
-        "tier":  tier,
-        "exp":   expire,
+        "sub":      user_id,
+        "email":    email,
+        "tier":     tier,
+        "is_admin": is_admin,
+        "exp":      expire,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=_ALGORITHM)
 
@@ -61,5 +62,15 @@ def require_premium(user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This feature requires a Premium subscription.",
+        )
+    return user
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Dependency that enforces admin access."""
+    if not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
         )
     return user

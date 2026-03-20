@@ -85,6 +85,17 @@ class Settings(BaseSettings):
     langchain_project: str = "fashion-recommendation"
     langchain_endpoint: str = "https://api.smith.langchain.com"
 
+    # Cron job secret (used to authenticate cron-job.org price check requests)
+    cron_secret: str = ""
+
+    # Admin — comma-separated emails that get is_admin=True on login
+    # e.g. ADMIN_EMAILS=email1@gmail.com,email2@gmail.com
+    admin_emails: str = ""
+
+    @property
+    def admin_email_list(self) -> list[str]:
+        return [e.strip() for e in self.admin_emails.split(',') if e.strip()]
+
     # Sentry error monitoring
     sentry_dsn: str = ""
 

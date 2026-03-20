@@ -21,7 +21,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-ivory">
-      <Header
+<Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
         wishlistCount={count}

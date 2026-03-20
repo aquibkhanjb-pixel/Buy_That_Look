@@ -20,6 +20,7 @@ class User(Base):
     name               = Column(Text, nullable=True)
     avatar_url         = Column(Text, nullable=True)
     tier                   = Column(Text, nullable=False, default="free")   # free | premium
+    is_admin               = Column(Boolean, nullable=False, default=False)
     razorpay_customer_id   = Column(Text, nullable=True)
     created_at             = Column(DateTime(timezone=True), server_default=func.now())
 
