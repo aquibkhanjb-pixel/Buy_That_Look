@@ -29,19 +29,47 @@ _IMAGE_TIMEOUT   = 4
 _N_SWAP_CANDIDATES = 3
 
 # ── Rate limit ────────────────────────────────────────────────────────────────
-_usage_store: Dict[str, int] = {}
 FREE_DAILY_LIMIT = 2
 
 
-def check_and_increment_usage(user_key: str, is_premium: bool) -> bool:
-    if is_premium:
+def check_and_increment_usage(user_id: Optional[str], is_premium: bool) -> bool:
+    """
+    Returns True if the user is allowed to generate an outfit plan.
+    Premium users: always allowed.
+    Free users: max 2/day tracked in user_usage.occasion_count (PostgreSQL).
+    Anonymous (no user_id): allowed — frontend enforces login anyway.
+    """
+    if is_premium or not user_id:
         return True
-    key = f"{user_key}:{date.today()}"
-    count = _usage_store.get(key, 0)
-    if count >= FREE_DAILY_LIMIT:
-        return False
-    _usage_store[key] = count + 1
-    return True
+
+    from app.db.database import SessionLocal
+    from app.db.models import UserUsage
+    import uuid as _uuid
+
+    today = date.today()
+    db = SessionLocal()
+    try:
+        row = db.query(UserUsage).filter(
+            UserUsage.user_id == _uuid.UUID(user_id),
+            UserUsage.date == today,
+        ).first()
+
+        if row is None:
+            row = UserUsage(user_id=_uuid.UUID(user_id), date=today, chat_count=0, occasion_count=0)
+            db.add(row)
+
+        if row.occasion_count >= FREE_DAILY_LIMIT:
+            return False
+
+        row.occasion_count += 1
+        db.commit()
+        return True
+    except Exception as exc:
+        logger.warning(f"Occasion rate-limit DB error (allowing request): {exc}")
+        db.rollback()
+        return True
+    finally:
+        db.close()
 
 
 # ── Brand tier ────────────────────────────────────────────────────────────────

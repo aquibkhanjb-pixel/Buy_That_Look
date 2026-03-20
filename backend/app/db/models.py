@@ -56,10 +56,11 @@ class WishlistItem(Base):
 class UserUsage(Base):
     __tablename__ = "user_usage"
 
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    user_id    = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    date       = Column(Date, nullable=False)
-    chat_count = Column(Integer, nullable=False, default=0)
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    user_id         = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    date            = Column(Date, nullable=False)
+    chat_count      = Column(Integer, nullable=False, default=0)
+    occasion_count  = Column(Integer, nullable=False, default=0)
 
 
 class ChatSession(Base):

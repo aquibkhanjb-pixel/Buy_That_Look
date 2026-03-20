@@ -1,10 +1,12 @@
 """
-Virtual Try-On Service — HuggingFace IDM-VTON via gradio_client.
+Virtual Try-On Service — IDM-VTON via HuggingFace Gradio Spaces.
 
-Fallback chain (all use the same IDM-VTON API format):
-  1. Nymbo/Virtual-Try-On    — featured space, always-on, no sleep
-  2. yisol/IDM-VTON           — original space, may be sleeping
-  3. levihsu/OOTDiffusion     — alternative VTON model
+Fallback chain:
+  1. yisol/IDM-VTON        — original IDM-VTON space
+  2. Nymbo/Virtual-Try-On  — always-on featured space, no sleep
+
+Note: CatVTON spaces (zhengchong, SaadAhmedSiddiqui, Shad0ws) are all
+in RUNTIME_ERROR / NO_APP_FILE — abandoned by owners as of March 2026.
 
 A HuggingFace token (HF_TOKEN in .env) is optional but recommended.
 """
@@ -20,14 +22,14 @@ from loguru import logger
 
 _HF_TOKEN: str = ""
 
-# ── Gradio Space IDs (tried in order) ───────────────────────────────────────
-_SPACES = [
-    "yisol/IDM-VTON",          # original IDM-VTON — currently active
-    "Nymbo/Virtual-Try-On",   # featured — always on, no sleep (fallback)
-]
-
 _DOWNLOAD_TIMEOUT = 15   # seconds for garment image download
 _CLIENT_TIMEOUT   = 120  # seconds to wait for gradio space response
+
+# ── IDM-VTON spaces (tried in order) ─────────────────────────────────────────
+_IDM_SPACES = [
+    "yisol/IDM-VTON",
+    "Nymbo/Virtual-Try-On",   # always-on featured space, no sleep
+]
 
 
 class TryOnService:
@@ -35,6 +37,7 @@ class TryOnService:
 
     def __init__(self):
         self._enabled = False
+        self._last_model: str = ""
 
     def initialize(self, hf_token: str = "") -> None:
         global _HF_TOKEN
@@ -44,7 +47,7 @@ class TryOnService:
             self._enabled = True
             logger.info(
                 f"Try-on service initialised "
-                f"({'token set' if hf_token else 'anonymous'} / {_SPACES[0]})"
+                f"({'token set' if hf_token else 'anonymous'} / IDM-VTON primary)"
             )
         except ImportError:
             logger.warning("gradio_client not installed — virtual try-on disabled")
@@ -52,6 +55,10 @@ class TryOnService:
     @property
     def is_enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def last_model(self) -> str:
+        return self._last_model
 
     # ------------------------------------------------------------------
     # Public
@@ -80,14 +87,16 @@ class TryOnService:
             return None
 
         try:
-            for space in _SPACES:
-                result = self._call_space(space, person_path, garment_path, garment_description)
+            for space in _IDM_SPACES:
+                result = self._call_idmvton(space, person_path, garment_path, garment_description)
                 if result:
+                    self._last_model = f"IDM-VTON via {space}"
                     logger.info(f"Try-on done via '{space}' in {int((time.time()-t0)*1000)} ms")
                     return result
                 logger.info(f"Space '{space}' failed — trying next fallback")
 
             logger.warning("All try-on spaces failed")
+            self._last_model = ""
             return None
         finally:
             _safe_unlink(person_path)
@@ -97,7 +106,7 @@ class TryOnService:
     # Private
     # ------------------------------------------------------------------
 
-    def _call_space(
+    def _call_idmvton(
         self,
         space_id: str,
         person_path: str,
@@ -108,10 +117,7 @@ class TryOnService:
             from gradio_client import Client, handle_file
 
             logger.info(f"Connecting to HuggingFace space: {space_id}")
-            client = Client(
-                space_id,
-                token=_HF_TOKEN or None,
-            )
+            client = Client(space_id, token=_HF_TOKEN or None)
 
             result = client.predict(
                 dict={
@@ -121,21 +127,20 @@ class TryOnService:
                 },
                 garm_img=handle_file(garment_path),
                 garment_des=description or "fashion garment",
-                is_checked=True,        # auto-generate body mask
+                is_checked=True,
                 is_checked_crop=False,
-                denoise_steps=20,       # 20 = fast; 30 = slightly better quality
+                denoise_steps=30,
                 seed=42,
                 api_name="/tryon",
             )
 
-            # result[0] = output image path (local temp file from gradio_client)
             result_path = result[0] if isinstance(result, (list, tuple)) else result
             return _file_to_b64(result_path)
 
         except Exception as exc:
             exc_s = str(exc)
             if "sleep" in exc_s.lower() or "unavailable" in exc_s.lower():
-                logger.warning(f"Space '{space_id}' is sleeping or unavailable: {exc_s[:120]}")
+                logger.warning(f"Space '{space_id}' sleeping/unavailable: {exc_s[:120]}")
             elif "queue" in exc_s.lower() or "timeout" in exc_s.lower():
                 logger.warning(f"Space '{space_id}' queue/timeout: {exc_s[:120]}")
             else:

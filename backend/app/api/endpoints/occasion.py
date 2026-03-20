@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -73,14 +73,13 @@ def get_occasion_categories(
 @router.post("/plan")
 def plan_occasion(
     body: PlanRequest,
-    request: Request,
     current_user: Optional[dict] = Depends(_get_optional_user),
 ):
     """Step 2 — Build outfit. Free: 2/day. Premium: unlimited."""
     is_premium = current_user and current_user.get("tier") == "premium"
-    user_key   = current_user["sub"] if current_user else request.client.host
+    user_id    = current_user["sub"] if current_user else None
 
-    if not check_and_increment_usage(str(user_key), is_premium):
+    if not check_and_increment_usage(user_id, is_premium):
         raise HTTPException(
             status_code=403,
             detail="Free tier allows 2 outfit plans per day. Upgrade to Premium for unlimited.",

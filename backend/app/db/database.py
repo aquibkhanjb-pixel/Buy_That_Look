@@ -3,7 +3,7 @@ SQLAlchemy engine, session factory, and declarative base.
 Shared across all ORM models (User, Subscription, etc.).
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 from app.config import get_settings
@@ -28,5 +28,11 @@ def get_db():
 
 
 def create_tables() -> None:
-    """Create all ORM-managed tables if they don't exist."""
+    """Create all ORM-managed tables if they don't exist, and run column migrations."""
     Base.metadata.create_all(bind=engine)
+    # Add occasion_count to user_usage if it was created before this column existed
+    with engine.connect() as conn:
+        conn.execute(text(
+            "ALTER TABLE user_usage ADD COLUMN IF NOT EXISTS occasion_count INTEGER NOT NULL DEFAULT 0"
+        ))
+        conn.commit()

@@ -81,6 +81,6 @@ async def virtual_tryon(
 
     return TryOnResponse(
         result_image=result_b64,
-        model_used="IDM-VTON (HuggingFace)",
+        model_used=tryon_service.last_model or "CatVTON / IDM-VTON (HuggingFace)",
         latency_ms=elapsed,
     )

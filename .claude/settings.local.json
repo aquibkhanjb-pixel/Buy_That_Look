@@ -98,7 +98,8 @@
       "Bash(\"C:/Users/Aquib Khan/.conda/envs/fashion-ai/python.exe\":*)",
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "WebSearch"
     ]
   }
 }
