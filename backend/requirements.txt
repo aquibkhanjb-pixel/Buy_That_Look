@@ -46,3 +46,6 @@ slowapi>=0.1.9
 
 # Logging
 loguru>=0.7.0
+
+# Error monitoring
+sentry-sdk[fastapi]>=2.0.0

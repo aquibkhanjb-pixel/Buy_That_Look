@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     langchain_project: str = "fashion-recommendation"
     langchain_endpoint: str = "https://api.smith.langchain.com"
 
+    # Sentry error monitoring
+    sentry_dsn: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

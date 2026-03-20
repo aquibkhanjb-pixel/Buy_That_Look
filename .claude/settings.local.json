@@ -99,7 +99,9 @@
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
       "Bash(npm install:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(\"C:\\\\Users\\\\Aquib Khan\\\\Desktop\\\\Fashion_Recommendation\\\\backend\\\\requirements.txt\")",
+      "Bash(echo \"sentry-sdk[fastapi]>=2.0.0\")"
     ]
   }
 }

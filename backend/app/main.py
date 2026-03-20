@@ -20,6 +20,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
 from app.api import api_router
 from app.config import get_settings
 from app.core.logging import setup_logging, logger
@@ -31,6 +35,15 @@ from app.services.chat_service import chat_service
 from app.services.tryon_service import tryon_service
 
 settings = get_settings()
+
+# Sentry — initialise before anything else so all errors are captured
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=0.2,   # 20% of requests for performance tracing
+        send_default_pii=False,
+    )
 
 # Rate limiter instance (shared across endpoints)
 limiter = Limiter(key_func=get_remote_address)
