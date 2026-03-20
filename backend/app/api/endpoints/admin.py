@@ -44,7 +44,10 @@ def get_stats(
     total_users   = db.query(func.count(User.id)).scalar() or 0
     premium_users = db.query(func.count(User.id)).filter(User.tier == "premium").scalar() or 0
     free_users    = total_users - premium_users
-    mrr           = premium_users * 99  # ₹99/month
+
+    price_row = db.execute(text("SELECT value FROM app_settings WHERE key = 'subscription_price'")).fetchone()
+    subscription_price = int(price_row[0]) if price_row else 25
+    mrr = premium_users * subscription_price
 
     new_today = db.query(func.count(User.id)).filter(
         func.date(User.created_at) == today
@@ -309,3 +312,42 @@ def admin_delete_alert(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── App Settings ───────────────────────────────────────────────────────────────
+
+class SettingsUpdate(BaseModel):
+    subscription_price: int
+
+
+@router.get("/settings")
+def get_admin_settings(
+    _admin: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get all app settings."""
+    rows = db.execute(text("SELECT key, value FROM app_settings")).all()
+    return {row[0]: row[1] for row in rows}
+
+
+@router.patch("/settings")
+def update_admin_settings(
+    body: SettingsUpdate,
+    _admin: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update app settings (e.g. subscription price)."""
+    if body.subscription_price < 1:
+        raise HTTPException(status_code=422, detail="Price must be at least ₹1")
+
+    db.execute(
+        text("""
+            INSERT INTO app_settings (key, value)
+            VALUES ('subscription_price', :value)
+            ON CONFLICT (key) DO UPDATE SET value = :value
+        """),
+        {"value": str(body.subscription_price)},
+    )
+    db.commit()
+    logger.info(f"[Admin] {_admin['email']} set subscription_price → ₹{body.subscription_price}")
+    return {"ok": True, "subscription_price": body.subscription_price}

@@ -7,11 +7,12 @@ import {
   Users, Crown, IndianRupee, MessageSquare, Trash2,
   ArrowUp, ArrowDown, Search, RefreshCw, ShieldCheck,
   ShoppingBag, Bell, TrendingUp, Calendar, ChevronLeft, ChevronRight,
-  Download, BarChart2, ExternalLink, UserCheck, UserX,
+  Download, BarChart2, ExternalLink, UserCheck, UserX, Settings,
 } from 'lucide-react'
 import {
   getAdminStats, getAdminUsers, updateUserTier, deleteUser,
   getAdminGrowth, getAdminAlerts, deleteAdminAlert, updateUserAdmin,
+  updateAppSettings,
 } from '@/lib/api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -166,7 +167,7 @@ function GrowthChart({ data }: { data: GrowthPoint[] }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'alerts'
+type Tab = 'overview' | 'alerts' | 'settings'
 
 export default function AdminPage() {
   const { data: session } = useSession()
@@ -198,6 +199,10 @@ export default function AdminPage() {
   const [alertsPage, setAlertsPage] = useState(1)
   const [alertsLoading, setAlertsLoading] = useState(false)
   const [alertDeleteConfirm, setAlertDeleteConfirm] = useState<number | null>(null)
+
+  // Settings tab
+  const [priceInput, setPriceInput] = useState<string>('')
+  const [priceLoading, setPriceLoading] = useState(false)
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
@@ -293,6 +298,20 @@ export default function AdminPage() {
       showToast('Alert deleted')
     } catch { showToast('Failed to delete alert', false) }
     finally { setAlertDeleteConfirm(null) }
+  }
+
+  // Save subscription price
+  const handleSavePrice = async () => {
+    const price = parseInt(priceInput)
+    if (!price || price < 1) { showToast('Enter a valid price', false); return }
+    setPriceLoading(true)
+    try {
+      await updateAppSettings(token, price)
+      await loadStats()
+      showToast(`Subscription price updated to ₹${price}`)
+      setPriceInput('')
+    } catch { showToast('Failed to update price', false) }
+    finally { setPriceLoading(false) }
   }
 
   // Export users as CSV
@@ -487,17 +506,19 @@ export default function AdminPage() {
         {/* Tabs */}
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex gap-6 border-t border-gray-100">
-            {(['overview', 'alerts'] as Tab[]).map(tab => (
+            {(['overview', 'alerts', 'settings'] as Tab[]).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`py-3 text-sm font-medium border-b-2 transition-colors capitalize ${
+                className={`py-3 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === tab
                     ? 'border-gray-900 text-gray-900'
                     : 'border-transparent text-gray-400 hover:text-gray-600'
                 }`}
               >
-                {tab === 'alerts' ? `Price Alerts${alertsTotal > 0 ? ` (${alertsTotal})` : stats ? ` (${stats.total_alerts})` : ''}` : 'Overview'}
+                {tab === 'alerts'
+                  ? `Price Alerts${alertsTotal > 0 ? ` (${alertsTotal})` : stats ? ` (${stats.total_alerts})` : ''}`
+                  : tab === 'settings' ? 'Settings' : 'Overview'}
               </button>
             ))}
           </div>
@@ -818,6 +839,57 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Settings Tab ── */}
+        {activeTab === 'settings' && (
+          <div className="max-w-lg space-y-6">
+            <div>
+              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-1">Settings</h2>
+              <p className="text-sm text-gray-500">Changes apply everywhere — pricing page, chat, try-on, and profile card.</p>
+            </div>
+
+            {/* Subscription Price */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                  <IndianRupee className="h-4 w-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Subscription Price</p>
+                  <p className="text-xs text-gray-400">
+                    Current: ₹{stats ? Math.round(stats.mrr / Math.max(stats.premium_users, 1)) : '—'}/month
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium">₹</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={priceInput}
+                    onChange={e => setPriceInput(e.target.value)}
+                    placeholder="Enter new price"
+                    className="w-full pl-7 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-200"
+                  />
+                </div>
+                <button
+                  onClick={handleSavePrice}
+                  disabled={priceLoading || !priceInput}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-700 disabled:opacity-40 transition-colors"
+                >
+                  {priceLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Settings className="h-3.5 w-3.5" />}
+                  Save
+                </button>
+              </div>
+
+              <p className="text-xs text-gray-400">
+                This updates the price shown on the pricing page, chat upgrade prompts, virtual try-on gate, and profile menu. It does <strong>not</strong> change your Razorpay plan — update the plan amount in the Razorpay dashboard separately.
+              </p>
             </div>
           </div>
         )}

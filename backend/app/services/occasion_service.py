@@ -23,10 +23,10 @@ settings = get_settings()
 
 _JUDGE_MODEL    = "gemini-2.5-flash"
 _EXTRACT_MODEL  = "gemini-2.5-flash"
-_MAX_JUDGE_ITERS = 2   # 3 iters + gap detection + redistribution exceeds 120s timeout
-_SEARCH_TIMEOUT  = 12
-_IMAGE_TIMEOUT   = 4
-_N_SWAP_CANDIDATES = 3
+_MAX_JUDGE_ITERS   = 1   # 1 parallel iteration ≈ 30-40s; 2 was sequential ~3 min
+_SEARCH_TIMEOUT    = 8   # fail fast on slow Serper calls (was 12)
+_IMAGE_TIMEOUT     = 4
+_N_SWAP_CANDIDATES = 2   # 2 candidates scored in one Gemini call (was 3)
 
 # ── Rate limit ────────────────────────────────────────────────────────────────
 FREE_DAILY_LIMIT = 2
@@ -810,32 +810,43 @@ def react_judge_loop(pieces: List[dict], context: dict,
             logger.info("Judge accepted outfit ✓")
             break
 
-        replaced = False
+        # Collect all pieces that need replacement
+        to_replace: List[Tuple[int, dict]] = []
         for pj in judgment["pieces"]:
             if pj["score"] != "replace":
                 continue
             cat_id = pj["category_id"]
             idx = next((i for i, p in enumerate(current) if p["category_id"] == cat_id), None)
-            if idx is None:
-                continue
+            if idx is not None:
+                to_replace.append((idx, pj))
 
+        if not to_replace:
+            break
+
+        # Search for all replacements in parallel (major speedup vs sequential)
+        def _do_replace(args: Tuple[int, dict]) -> Tuple[int, Optional[dict]]:
+            idx, pj = args
             old = current[idx]
             locked = [p for i, p in enumerate(current) if i != idx]
-            logger.info(f"Replacing [{old['category_label']}]: {pj.get('reason','')}")
-
+            logger.info(f"Replacing [{old['category_label']}]: {pj.get('reason','')[:120]}")
             try:
-                new_piece = _search_one(
-                    cat_id, old["category_label"], old["budget"],
+                return idx, _search_one(
+                    old["category_id"], old["category_label"], old["budget"],
                     context, locked_pieces=locked,
                     brand_tier=brand_tier, n_candidates=_N_SWAP_CANDIDATES,
                 )
             except Exception as exc:
                 logger.warning(f"ReAct search failed for [{old['category_label']}]: {exc}")
-                continue
+                return idx, None
 
-            if new_piece:
-                current[idx] = new_piece
-                replaced = True
+        replaced = False
+        with ThreadPoolExecutor(max_workers=min(len(to_replace), 4)) as ex:
+            futures = {ex.submit(_do_replace, arg): arg for arg in to_replace}
+            for future in as_completed(futures):
+                idx, new_piece = future.result()
+                if new_piece:
+                    current[idx] = new_piece
+                    replaced = True
 
         if not replaced:
             break

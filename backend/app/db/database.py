@@ -39,6 +39,16 @@ def create_tables() -> None:
             conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE"
             ))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """))
+            conn.execute(text(
+                "INSERT INTO app_settings (key, value) VALUES ('subscription_price', '25') "
+                "ON CONFLICT (key) DO NOTHING"
+            ))
             conn.commit()
     except Exception as e:
         import logging

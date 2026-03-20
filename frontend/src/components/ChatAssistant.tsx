@@ -8,6 +8,7 @@ import {
   History, Crown, Trash2, Plus, ChevronLeft, Loader2,
 } from 'lucide-react'
 import { useSession } from 'next-auth/react'
+import { useSettings } from '@/contexts/SettingsContext'
 import { ChatMessage, SearchResult } from '@/types'
 import {
   sendChatMessage,
@@ -248,6 +249,7 @@ function HistorySidebar({
   onNewChat: () => void
   onClose: () => void
 }) {
+  const { subscriptionPrice } = useSettings()
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -337,7 +339,7 @@ function HistorySidebar({
               href="/pricing"
               className="inline-block mt-1 bg-gold text-white text-[11px] font-medium px-4 py-1.5 rounded-lg hover:bg-amber-600 transition-colors"
             >
-              Upgrade — ₹99/mo
+              Upgrade — ₹{subscriptionPrice}/mo
             </Link>
           </div>
         ) : loading ? (
@@ -578,7 +580,7 @@ export default function ChatAssistant({ onProductClick, triggerRef, onWishlistTo
           </div>
           <div>
             <p className="text-sm font-semibold text-noir tracking-tight">AI Style Assistant</p>
-            <p className="text-[10px] text-noir/40 tracking-wide">Powered by Gemini · Serper</p>
+            <p className="text-[10px] text-noir/40 tracking-wide">Personalised · Real-time results</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />

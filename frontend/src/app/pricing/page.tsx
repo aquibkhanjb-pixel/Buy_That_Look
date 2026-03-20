@@ -11,6 +11,7 @@ import {
   cancelSubscription,
   refreshBackendToken,
 } from '@/lib/api'
+import { useSettings } from '@/contexts/SettingsContext'
 
 // Razorpay types
 declare global {
@@ -73,6 +74,7 @@ function loadRazorpayScript(): Promise<boolean> {
 
 function PricingContent() {
   const { data: session, update: updateSession } = useSession()
+  const { subscriptionPrice } = useSettings()
   const searchParams = useSearchParams()
   const success = searchParams.get('success') === 'true'
 
@@ -118,7 +120,7 @@ function PricingContent() {
         key:             checkout.key_id,
         subscription_id: checkout.subscription_id,
         name:            'FashionAI',
-        description:     'Premium — ₹99/month',
+        description:     `Premium — ₹${subscriptionPrice}/month`,
         prefill: {
           name:  checkout.user_name,
           email: checkout.user_email,
@@ -223,7 +225,7 @@ function PricingContent() {
               </span>
             )}
           </div>
-          <p className="text-3xl font-bold text-ivory mt-3">₹99</p>
+          <p className="text-3xl font-bold text-ivory mt-3">₹{subscriptionPrice}</p>
           <p className="text-xs text-ivory/40 mt-0.5">per month · Card, UPI, Netbanking</p>
           <ul className="mt-8 space-y-3">
             {PREMIUM_FEATURES.map((f) => (

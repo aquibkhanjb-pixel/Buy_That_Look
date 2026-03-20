@@ -8,6 +8,7 @@ import ProductModal from '@/components/ProductModal'
 import WishlistPanel from '@/components/WishlistPanel'
 import FindThisLook from '@/components/FindThisLook'
 import OccasionPlanner from '@/components/OccasionPlanner'
+import Footer from '@/components/Footer'
 import { useWishlist } from '@/lib/useWishlist'
 import { Product, SearchResult } from '@/types'
 
@@ -90,6 +91,8 @@ export default function Home() {
           onClearLimitError={clearLimitError}
         />
       )}
+
+      <Footer />
     </main>
   )
 }

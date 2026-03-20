@@ -33,7 +33,7 @@ export default function Header({
             AI-Powered Style Intelligence
           </p>
           <p className="text-[10px] tracking-[0.2em] uppercase text-gold/70">
-            ✦ Powered by Gemini · Serper · LangGraph
+            ✦ Virtual Try-On &nbsp;·&nbsp; Occasion Planner &nbsp;·&nbsp; Price Alerts
           </p>
         </div>
 

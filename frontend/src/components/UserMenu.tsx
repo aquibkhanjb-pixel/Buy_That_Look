@@ -5,9 +5,11 @@ import { useSession, signOut } from 'next-auth/react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { Crown, LogOut, ChevronDown, Sparkles } from 'lucide-react'
+import { useSettings } from '@/contexts/SettingsContext'
 
 export default function UserMenu() {
   const { data: session } = useSession()
+  const { subscriptionPrice } = useSettings()
   const [open, setOpen]   = useState(false)
   const ref               = useRef<HTMLDivElement>(null)
 
@@ -100,7 +102,7 @@ export default function UserMenu() {
                 <Crown className="h-4 w-4 text-gold" />
                 <span>
                   Upgrade to Premium
-                  <span className="ml-1.5 text-[10px] bg-gold text-white px-1.5 py-0.5 rounded-full">₹99/mo</span>
+                  <span className="ml-1.5 text-[10px] bg-gold text-white px-1.5 py-0.5 rounded-full">₹{subscriptionPrice}/mo</span>
                 </span>
               </Link>
             )}

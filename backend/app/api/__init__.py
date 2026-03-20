@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from .endpoints import products, health, chat, tryon, trends, findlook, alerts, users, payments, wishlist, chat_history, occasion, admin
+from .endpoints import products, health, chat, tryon, trends, findlook, alerts, users, payments, wishlist, chat_history, occasion, admin, settings
 
 api_router = APIRouter()
 
@@ -19,3 +19,4 @@ api_router.include_router(wishlist.router,      prefix="/wishlist",       tags=[
 api_router.include_router(chat_history.router, prefix="/chat/history",   tags=["Chat History"])
 api_router.include_router(occasion.router,     prefix="/occasion",       tags=["Occasion Planner"])
 api_router.include_router(admin.router,        prefix="/admin",          tags=["Admin"])
+api_router.include_router(settings.router,     prefix="/settings",       tags=["Settings"])

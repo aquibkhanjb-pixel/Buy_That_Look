@@ -414,6 +414,20 @@ export async function findThisLook(options: {
 
 // ── Admin ────────────────────────────────────────────────────────────────────
 
+export async function getAppSettings(): Promise<Record<string, string>> {
+  const response = await api.get('/settings')
+  return response.data
+}
+
+export async function updateAppSettings(token: string, subscriptionPrice: number) {
+  const response = await api.patch(
+    '/admin/settings',
+    { subscription_price: subscriptionPrice },
+    { headers: authHeader(token) }
+  )
+  return response.data
+}
+
 export async function getAdminStats(token: string) {
   const response = await api.get('/admin/stats', { headers: authHeader(token) })
   return response.data

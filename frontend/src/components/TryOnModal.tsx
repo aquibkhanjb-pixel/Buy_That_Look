@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { X, Upload, Loader2, Shirt, Crown } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import { virtualTryOnAuth } from '@/lib/api'
+import { useSettings } from '@/contexts/SettingsContext'
 
 interface TryOnModalProps {
   garmentImageUrl: string
@@ -15,6 +16,7 @@ interface TryOnModalProps {
 
 export default function TryOnModal({ garmentImageUrl, garmentTitle, onClose }: TryOnModalProps) {
   const { data: session } = useSession()
+  const { subscriptionPrice } = useSettings()
   const token = session?.backendToken
   const userTier = session?.user?.tier ?? 'free'
 
@@ -97,7 +99,7 @@ export default function TryOnModal({ garmentImageUrl, garmentTitle, onClose }: T
                 target="_blank"
                 className="inline-block mt-2 bg-gold text-white text-sm font-medium px-6 py-2.5 rounded-xl hover:bg-amber-600 transition-colors"
               >
-                Upgrade to Premium — ₹99/mo
+                Upgrade to Premium — ₹{subscriptionPrice}/mo
               </Link>
             </div>
           )}
