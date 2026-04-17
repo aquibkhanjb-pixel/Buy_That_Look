@@ -186,8 +186,9 @@ async def chat(
     )
 
     # ── Convert products to SearchResult schema ──
+    # Never return products when AI is unavailable — results without AI context are misleading
     products = []
-    if result.get("products_to_show"):
+    if result.get("products_to_show") and not result.get("ai_unavailable"):
         products = convert_to_search_results(result["products_to_show"])
 
     # ── Increment daily chat count + persist history for premium ──
@@ -259,12 +260,14 @@ async def chat(
         db.commit()
 
     # ── Convert web results to WebSearchResult schema ──
+    # Also suppressed when AI is unavailable — no results without AI context
     web_results = []
-    for wr in result.get("web_results", []):
-        try:
-            web_results.append(WebSearchResult(**wr))
-        except Exception:
-            continue
+    if not result.get("ai_unavailable"):
+        for wr in result.get("web_results", []):
+            try:
+                web_results.append(WebSearchResult(**wr))
+            except Exception:
+                continue
 
     return ChatResponse(
         message=result["response"],

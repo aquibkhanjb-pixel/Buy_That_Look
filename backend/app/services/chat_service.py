@@ -2316,12 +2316,14 @@ def generate_response(state: ChatState) -> ChatState:
     # ── Graceful degradation when Gemini API is down ──
     gemini_down = not llm_service.is_enabled or is_gemini_circuit_open()
     if gemini_down:
-        if web_triggered:
-            # Web search still worked — note AI is down but links are available
-            reply = "I found some links you can explore. (AI assistant is temporarily offline.)"
-        else:
-            reply = gemini_unavailable_message()
-        return {**state, "response": reply, "products_to_show": products_to_show, "ai_unavailable": True}
+        # Do NOT show any products — search results without AI context are misleading
+        return {
+            **state,
+            "response": gemini_unavailable_message(),
+            "products_to_show": [],
+            "web_results": [],
+            "ai_unavailable": True,
+        }
 
     # Build context for Gemini
     if web_triggered and web_results:
