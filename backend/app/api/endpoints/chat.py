@@ -277,4 +277,5 @@ async def chat(
         clarification_count=result.get("clarification_count", 0),
         options=result.get("clarification_options", []),
         is_outfit_completion=result.get("is_outfit_completion", False),
+        ai_unavailable=result.get("ai_unavailable", False),
     )

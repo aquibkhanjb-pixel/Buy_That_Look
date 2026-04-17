@@ -145,3 +145,5 @@ class ChatResponse(BaseModel):
     options: List[str] = []
     # True when this response contains outfit completion results (hides "Complete the Look" on cards)
     is_outfit_completion: bool = False
+    # True when Gemini API is unavailable — frontend should show a modal instead of inline text
+    ai_unavailable: bool = False

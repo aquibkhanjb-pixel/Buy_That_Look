@@ -2317,16 +2317,11 @@ def generate_response(state: ChatState) -> ChatState:
     gemini_down = not llm_service.is_enabled or is_gemini_circuit_open()
     if gemini_down:
         if web_triggered:
-            # Web search still worked — give a helpful but honest message
-            reply = (
-                "I found some links you can explore online. "
-                "(Note: our AI assistant is temporarily unavailable, so responses may be limited.)"
-            )
-        elif intent == "general":
-            reply = gemini_unavailable_message()
+            # Web search still worked — note AI is down but links are available
+            reply = "I found some links you can explore. (AI assistant is temporarily offline.)"
         else:
             reply = gemini_unavailable_message()
-        return {**state, "response": reply, "products_to_show": products_to_show}
+        return {**state, "response": reply, "products_to_show": products_to_show, "ai_unavailable": True}
 
     # Build context for Gemini
     if web_triggered and web_results:
@@ -2587,7 +2582,7 @@ class ChatService:
         # open (quota/503) because keyword-based intent + Serper web search still works.
         from app.services.llm_service import _perm_error
         if not llm_service.is_enabled and not _serper_api_key:
-            # Neither AI nor search is available — show informative banner immediately
+            # Neither AI nor search is available — signal frontend to show modal
             return {
                 "response": gemini_unavailable_message(),
                 "products_to_show": [],
@@ -2598,6 +2593,7 @@ class ChatService:
                 "web_search_performed": False,
                 "clarification_options": [],
                 "is_outfit_completion": False,
+                "ai_unavailable": True,
             }
 
         # Restore session memory (server-side takes priority over client-sent)

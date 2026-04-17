@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react'
 import {
   Sparkles, Crown, Loader2, RefreshCw, ShoppingBag,
   ChevronRight, Plus, X, Star, ExternalLink, Heart,
-  AlertTriangle, CheckCircle2, MinusCircle,
+  AlertTriangle, CheckCircle2, MinusCircle, WifiOff,
 } from 'lucide-react'
 import Link from 'next/link'
 import {
@@ -224,6 +224,56 @@ function OutfitPieceCard({
   )
 }
 
+// ── AI Down Modal ─────────────────────────────────────────────────────────────
+function AIDownModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-noir/60 backdrop-blur-sm">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-7 flex flex-col items-center text-center gap-4 relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-noir/30 hover:text-noir transition-colors"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center">
+          <WifiOff className="h-7 w-7 text-amber-500" />
+        </div>
+
+        <div>
+          <h3 className="text-lg font-semibold text-noir tracking-tight">AI Assistant Offline</h3>
+          <p className="text-sm text-noir/50 mt-1">Our AI service is temporarily unavailable</p>
+        </div>
+
+        <p className="text-sm text-noir/70 leading-relaxed">
+          The Occasion Planner requires AI to generate outfit suggestions.
+          This is likely due to an API quota limit or temporary outage.
+          Please check back in a little while!
+        </p>
+
+        <div className="w-full bg-ivory rounded-2xl p-4 text-left space-y-1.5">
+          <p className="text-[11px] font-semibold text-noir/40 uppercase tracking-wider mb-2">In the meantime</p>
+          <div className="flex items-center gap-2 text-sm text-noir/70">
+            <Sparkles className="h-3.5 w-3.5 text-gold flex-shrink-0" />
+            Browse trending styles on the home page
+          </div>
+          <div className="flex items-center gap-2 text-sm text-noir/70">
+            <Heart className="h-3.5 w-3.5 text-gold flex-shrink-0" />
+            Check your saved Wishlist items
+          </div>
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full py-2.5 bg-noir text-white text-sm font-medium rounded-2xl hover:bg-noir/80 transition-colors"
+        >
+          Got it, I'll try later
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: OccasionPlannerProps) {
   const { data: session } = useSession()
@@ -244,6 +294,7 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
   const [swappingId, setSwappingId] = useState<string | null>(null)
   const [openSwapId, setOpenSwapId] = useState<string | null>(null)
   const [conflicts, setConflicts]   = useState<CompatibilityConflict[] | null>(null)
+  const [showAIDownModal, setShowAIDownModal] = useState(false)
 
   // ── Step 1 ─────────────────────────────────────────────────────────────────
   async function handleDescriptionSubmit() {
@@ -257,8 +308,13 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
       setCategories(data.categories)
       setSelectedIds(data.categories.filter(c => c.default).map(c => c.id))
       setStep('categories')
-    } catch {
-      setError('Could not analyse your occasion. Please try again.')
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 503) {
+        setShowAIDownModal(true)
+      } else {
+        setError('Could not analyse your occasion. Please try again.')
+      }
       setStep('input')
     }
   }
@@ -285,10 +341,15 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(status === 403
-        ? detail || 'Daily limit reached. Upgrade to Premium for unlimited outfit planning.'
-        : 'Could not build your outfit. Please try again.')
-      setStep('categories')
+      if (status === 503) {
+        setShowAIDownModal(true)
+        setStep('input')
+      } else {
+        setError(status === 403
+          ? detail || 'Daily limit reached. Upgrade to Premium for unlimited outfit planning.'
+          : 'Could not build your outfit. Please try again.')
+        setStep('categories')
+      }
     } finally {
       clearInterval(timer)
     }
@@ -605,6 +666,8 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
 
   // ── Input (default) ─────────────────────────────────────────────────────────
   return (
+    <>
+    {showAIDownModal && <AIDownModal onClose={() => setShowAIDownModal(false)} />}
     <div className="max-w-2xl mx-auto space-y-8">
       <div className="text-center space-y-3 pt-4">
         <div className="inline-flex items-center gap-2 bg-gold/10 text-gold text-xs px-3 py-1.5 rounded-full font-medium">
@@ -668,5 +731,6 @@ export default function OccasionPlanner({ onWishlistToggle, isWishlisted }: Occa
         ))}
       </div>
     </div>
+    </>
   )
 }

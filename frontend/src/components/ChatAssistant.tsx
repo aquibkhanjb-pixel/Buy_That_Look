@@ -5,7 +5,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import {
   Send, Sparkles, ExternalLink, ImageIcon, X, Shirt, Heart, Wand2,
-  History, Crown, Trash2, Plus, ChevronLeft, Loader2,
+  History, Crown, Trash2, Plus, ChevronLeft, Loader2, WifiOff,
 } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import { useSettings } from '@/contexts/SettingsContext'
@@ -382,6 +382,64 @@ function HistorySidebar({
   )
 }
 
+// ── AI Unavailable Modal ───────────────────────────────────────────────────
+
+function AIDownModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-noir/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-7 flex flex-col items-center text-center gap-4 relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-noir/30 hover:text-noir transition-colors"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        {/* Icon */}
+        <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center">
+          <WifiOff className="h-7 w-7 text-amber-500" />
+        </div>
+
+        {/* Title */}
+        <div>
+          <h3 className="text-lg font-semibold text-noir tracking-tight">AI Assistant Offline</h3>
+          <p className="text-sm text-noir/50 mt-1">Our AI service is temporarily unavailable</p>
+        </div>
+
+        {/* Body */}
+        <p className="text-sm text-noir/70 leading-relaxed">
+          This is likely due to an API quota limit or a temporary outage.
+          Please check back in a little while.
+        </p>
+
+        {/* What you can still do */}
+        <div className="w-full bg-ivory rounded-2xl p-4 text-left space-y-1.5">
+          <p className="text-[11px] font-semibold text-noir/40 uppercase tracking-wider mb-2">In the meantime</p>
+          <div className="flex items-center gap-2 text-sm text-noir/70">
+            <Sparkles className="h-3.5 w-3.5 text-gold flex-shrink-0" />
+            Browse trending styles on the home page
+          </div>
+          <div className="flex items-center gap-2 text-sm text-noir/70">
+            <Shirt className="h-3.5 w-3.5 text-gold flex-shrink-0" />
+            Try the Occasion Planner for curated looks
+          </div>
+          <div className="flex items-center gap-2 text-sm text-noir/70">
+            <Heart className="h-3.5 w-3.5 text-gold flex-shrink-0" />
+            Check your saved Wishlist items
+          </div>
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full py-2.5 bg-noir text-white text-sm font-medium rounded-2xl hover:bg-noir/80 transition-colors"
+        >
+          Got it, I'll try later
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 interface ChatAssistantProps {
@@ -407,6 +465,7 @@ export default function ChatAssistant({ onProductClick, triggerRef, onWishlistTo
   const [tryOnGarment, setTryOnGarment] = useState<{ imageUrl: string; title: string } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [activeHistorySession, setActiveHistorySession] = useState<string | undefined>()
+  const [showAIDownModal, setShowAIDownModal] = useState(false)
 
   const apiMessages = useRef<ChatMessage[]>([])
   const bottomRef   = useRef<HTMLDivElement>(null)
@@ -519,6 +578,15 @@ export default function ChatAssistant({ onProductClick, triggerRef, onWishlistTo
       }
       if (response.user_preferences) setUserPreferences(response.user_preferences as Record<string, unknown>)
       if (response.clarification_count !== undefined) setClarificationCount(response.clarification_count)
+
+      // Show modal dialog when Gemini is unavailable instead of inline gibberish
+      if (response.ai_unavailable) {
+        setShowAIDownModal(true)
+        // Remove the loading bubble without adding a chat message
+        setBubbles((prev) => prev.slice(0, -1))
+        return
+      }
+
       apiMessages.current = [...apiMessages.current, { role: 'assistant', content: response.message }]
       setBubbles((prev) => [
         ...prev.slice(0, -1),
@@ -774,6 +842,10 @@ export default function ChatAssistant({ onProductClick, triggerRef, onWishlistTo
           garmentTitle={tryOnGarment.title}
           onClose={() => setTryOnGarment(null)}
         />
+      )}
+
+      {showAIDownModal && (
+        <AIDownModal onClose={() => setShowAIDownModal(false)} />
       )}
     </div>
   )

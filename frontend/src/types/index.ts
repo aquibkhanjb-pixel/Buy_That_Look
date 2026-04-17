@@ -62,6 +62,7 @@ export interface ChatResponse {
   clarification_count: number
   options: string[]  // MCQ quick-pick chips for clarification questions
   is_outfit_completion: boolean  // True when response is outfit completion results
+  ai_unavailable?: boolean  // True when Gemini API is down — frontend shows modal
 }
 
 export interface WebSearchResult {
