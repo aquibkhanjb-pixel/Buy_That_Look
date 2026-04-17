@@ -62,7 +62,12 @@ except ImportError:
     logger.warning("langgraph not installed — chat will use simple fallback")
 
 from app.schemas.chat import FashionFeatures, SearchParams, WebSearchResult
-from app.services.llm_service import llm_service
+from app.services.llm_service import (
+    llm_service,
+    report_gemini_error,
+    is_gemini_circuit_open,
+    gemini_unavailable_message,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,10 +213,6 @@ _FAST_MODEL = "gemini-2.5-flash"   # thinking disabled via thinking_budget=0 →
 _CHAT_MODEL = "gemini-2.5-flash"   # thinking enabled → richer conversational replies
 _PRO_MODEL  = "gemini-2.5-pro"
 
-# Circuit breaker: skip Gemini calls for 60 s after a 429 error
-_rate_limited_until: float = 0.0
-
-
 @traceable(name="gemini_call", run_type="llm", tags=["gemini", "chat"])
 def _gemini_call(prompt: str, model: str = _FAST_MODEL, disable_thinking: bool = True) -> Optional[str]:
     """Make a Gemini API call. Returns text or None on failure.
@@ -219,13 +220,12 @@ def _gemini_call(prompt: str, model: str = _FAST_MODEL, disable_thinking: bool =
     disable_thinking=True (default): passes thinking_budget=0 to gemini-2.5-flash,
     disabling chain-of-thought and reducing latency from ~8 s to ~1-2 s.
     Pass disable_thinking=False for the final conversational reply (generate_response).
-    Implements a circuit breaker for 429/503 errors.
+    Uses the shared circuit breaker from llm_service (handles quota, perm errors, etc.).
     """
-    global _rate_limited_until
     if not llm_service.is_enabled:
         return None
-    if time.time() < _rate_limited_until:
-        logger.debug("Gemini rate-limit circuit breaker active — skipping call")
+    if is_gemini_circuit_open():
+        logger.debug("Gemini circuit breaker active — skipping call")
         return None
     try:
         kwargs: dict = {"model": model, "contents": prompt}
@@ -240,15 +240,7 @@ def _gemini_call(prompt: str, model: str = _FAST_MODEL, disable_thinking: bool =
         response = llm_service._client.models.generate_content(**kwargs)
         return response.text.strip()
     except Exception as exc:
-        exc_str = str(exc)
-        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
-            _rate_limited_until = time.time() + 60
-            logger.warning("Gemini quota exceeded — circuit breaker active for 60 s")
-        elif "503" in exc_str or "UNAVAILABLE" in exc_str:
-            _rate_limited_until = time.time() + 30
-            logger.warning("Gemini service unavailable — circuit breaker active for 30 s")
-        else:
-            logger.warning(f"Gemini call failed: {exc}")
+        report_gemini_error(str(exc))
         return None
 
 
@@ -263,10 +255,9 @@ def _gemini_vision_call(contents: list) -> Optional[str]:
     """Make a multimodal Gemini Vision call (list of text strings + PIL Images).
     Shares the same circuit-breaker state as _gemini_call.
     """
-    global _rate_limited_until
     if not llm_service.is_enabled:
         return None
-    if time.time() < _rate_limited_until:
+    if is_gemini_circuit_open():
         logger.debug("Gemini circuit breaker active — skipping vision call")
         return None
     try:
@@ -281,15 +272,7 @@ def _gemini_vision_call(contents: list) -> Optional[str]:
         response = llm_service._client.models.generate_content(**_kwargs)
         return response.text.strip()
     except Exception as exc:
-        exc_str = str(exc)
-        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
-            _rate_limited_until = time.time() + 60
-            logger.warning("Gemini quota exceeded — circuit breaker active for 60 s")
-        elif "503" in exc_str or "UNAVAILABLE" in exc_str:
-            _rate_limited_until = time.time() + 30
-            logger.warning("Gemini service unavailable — circuit breaker active for 30 s")
-        else:
-            logger.warning(f"Gemini vision call failed: {exc}")
+        report_gemini_error(str(exc))
         return None
 
 
@@ -1646,25 +1629,78 @@ def outfit_completion_node(state: ChatState) -> ChatState:
 # Node 7B — Web Search (Direct Links — no Grounding)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Trusted Indian fashion e-commerce domains — only results from these are accepted
+_TRUSTED_FASHION_DOMAINS = {
+    "myntra.com", "ajio.com", "amazon.in", "flipkart.com", "meesho.com",
+    "nykaafashion.com", "tatacliq.com", "snapdeal.com", "limeroad.com",
+    "nykaa.com", "jabong.com", "koovs.com", "westside.com", "shoppersstop.com",
+    "pantaloons.com", "maxfashion.in", "global-desi.com", "biba.in",
+    "w-india.com", "libas.in", "okhai.com", "fabindia.com",
+}
+
+# Keywords in product titles that indicate non-clothing items to reject.
+# These cover beauty/cosmetics, home, novelty, and accessories sold on
+# fashion platforms (e.g. ajio, nykaa sell beauty alongside clothes).
+_REJECT_TITLE_KEYWORDS = {
+    # Novelty / personalized
+    "custom face", "custom photo", "personalized photo", "photo printed",
+    "face printed", "heat activated", "photo socks", "face socks",
+    "custom sock", "return gift", "wedding gift", "gift set", "gift box",
+    "scented candle", "home decor", "wall art", "frame", "poster",
+    "mug", "keychain", "phone case",
+    # Beauty / cosmetics / skincare
+    "lipstick", "lip gloss", "lip liner", "lip balm", "lip color",
+    "foundation", "concealer", "mascara", "eyeliner", "eyeshadow",
+    "blush", "highlighter", "bronzer", "primer", "bb cream", "cc cream",
+    "moisturizer", "serum", "face wash", "face cream", "face pack",
+    "toner", "sunscreen", "spf", "cleanser", "scrub", "body lotion",
+    "body wash", "shampoo", "conditioner", "hair oil", "hair mask",
+    "hair color", "hair dye", "nail polish", "nail color", "nail art",
+    "perfume", "deodorant", "body spray", "eau de",
+    "cosmetics", "makeup", "skincare", "haircare",
+    # Footwear (only reject if app is showing clothing — remove if footwear is desired)
+    # Kept out intentionally — footwear IS a valid fashion category
+    # Home / kitchen / other non-fashion
+    "bedsheet", "pillow cover", "curtain", "table cloth", "mat",
+    "cookware", "utensil", "water bottle", "flask", "lunch box",
+}
+
+
 def _serper_search(query: str, num: int = 8) -> List[dict]:
     """
     Call Serper.dev Google Shopping API for real product results with images and prices.
+    Filters results to trusted Indian fashion platforms only.
     Returns empty list if API key is not set or call fails — caller falls back to direct links.
     """
     if not _serper_api_key:
         return []
     try:
         import requests
+        # Request more items so filtering still yields enough results
+        fetch_num = min(num * 3, 30)
         resp = requests.post(
             "https://google.serper.dev/shopping",
             headers={"X-API-KEY": _serper_api_key, "Content-Type": "application/json"},
-            json={"q": query, "gl": "in", "hl": "en", "num": num},
+            json={"q": query, "gl": "in", "hl": "en", "num": fetch_num},
             timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
         results = []
-        for item in data.get("shopping", [])[:num]:
+        for item in data.get("shopping", []):
+            source = (item.get("source") or "").lower()
+            title  = (item.get("title") or "").lower()
+            link   = (item.get("link") or "").lower()
+
+            # Accept only trusted fashion domains
+            is_trusted = any(domain in source or domain in link for domain in _TRUSTED_FASHION_DOMAINS)
+            if not is_trusted:
+                continue
+
+            # Reject novelty / non-fashion items by title keywords
+            if any(kw in title for kw in _REJECT_TITLE_KEYWORDS):
+                continue
+
             results.append({
                 "title":        item.get("title", ""),
                 "url":          item.get("link", ""),
@@ -1675,7 +1711,10 @@ def _serper_search(query: str, num: int = 8) -> List[dict]:
                 "rating_count": item.get("ratingCount"),
                 "snippet":      item.get("delivery"),
             })
-        logger.info(f"Serper: {len(results)} products for '{query[:50]}'")
+            if len(results) >= num:
+                break
+
+        logger.info(f"Serper: {len(results)} trusted-domain products for '{query[:50]}'")
         return results
     except Exception as exc:
         logger.warning(f"Serper search failed: {exc}")
@@ -1731,7 +1770,15 @@ def _serper_lens_search(image_bytes: bytes, num: int = 6) -> List[dict]:
         results = []
         # Serper Lens returns matches under "organic" (not "visual_matches")
         items = data.get("organic") or data.get("visual_matches") or []
-        for item in items[:num]:
+        for item in items:
+            source = (item.get("source") or "").lower()
+            link   = (item.get("link") or "").lower()
+            title  = (item.get("title") or "").lower()
+            is_trusted = any(domain in source or domain in link for domain in _TRUSTED_FASHION_DOMAINS)
+            if not is_trusted:
+                continue
+            if any(kw in title for kw in _REJECT_TITLE_KEYWORDS):
+                continue
             results.append({
                 "title":       item.get("title", ""),
                 "url":         item.get("link", ""),
@@ -1741,7 +1788,9 @@ def _serper_lens_search(image_bytes: bytes, num: int = 6) -> List[dict]:
                 "snippet":     item.get("snippet", ""),
                 "source":      "google_lens",
             })
-        logger.info(f"Google Lens: {len(results)} visual matches for {public_url}")
+            if len(results) >= num:
+                break
+        logger.info(f"Google Lens: {len(results)} trusted-domain visual matches for {public_url}")
         return results
     except Exception as exc:
         logger.warning(f"Google Lens search failed: {exc}")
@@ -2265,12 +2314,18 @@ def generate_response(state: ChatState) -> ChatState:
     history = _format_history(state.get("messages", []))
 
     # ── Graceful degradation when Gemini API is down ──
-    gemini_unavailable = time.time() < _rate_limited_until
-    if gemini_unavailable and not web_triggered:
-        reply = (
-            "My AI service is temporarily unavailable (high demand or quota limit). "
-            "Please try again in a minute. If the problem persists, the daily quota may be exhausted."
-        )
+    gemini_down = not llm_service.is_enabled or is_gemini_circuit_open()
+    if gemini_down:
+        if web_triggered:
+            # Web search still worked — give a helpful but honest message
+            reply = (
+                "I found some links you can explore online. "
+                "(Note: our AI assistant is temporarily unavailable, so responses may be limited.)"
+            )
+        elif intent == "general":
+            reply = gemini_unavailable_message()
+        else:
+            reply = gemini_unavailable_message()
         return {**state, "response": reply, "products_to_show": products_to_show}
 
     # Build context for Gemini
@@ -2278,16 +2333,6 @@ def generate_response(state: ChatState) -> ChatState:
         result_context = f"Searched online and found {len(web_results)} links/products."
     else:
         result_context = "No products found online."
-
-    if not llm_service.is_enabled:
-        # Simple fallback without Gemini
-        if web_triggered:
-            response = "Here are some links to search for this item online."
-        elif intent == "general":
-            response = "How can I help you find the perfect fashion item?"
-        else:
-            response = "I couldn't find matching products. Try describing the style or occasion."
-        return {**state, "response": response, "products_to_show": products_to_show}
 
     tone_guide = {
         "new_search": "excited and helpful",
@@ -2536,6 +2581,25 @@ class ChatService:
         Run the conversation through the graph.
         Returns {response, products_to_show, web_results, user_preferences, clarification_count, search_performed, web_search_performed}
         """
+        # ── Early exit: if Gemini is permanently disabled (bad key / billing),
+        # return a single clear message without running the full graph.
+        # We still allow the graph to run when the circuit breaker is only *temporarily*
+        # open (quota/503) because keyword-based intent + Serper web search still works.
+        from app.services.llm_service import _perm_error
+        if not llm_service.is_enabled and not _serper_api_key:
+            # Neither AI nor search is available — show informative banner immediately
+            return {
+                "response": gemini_unavailable_message(),
+                "products_to_show": [],
+                "web_results": [],
+                "user_preferences": {},
+                "clarification_count": 0,
+                "search_performed": False,
+                "web_search_performed": False,
+                "clarification_options": [],
+                "is_outfit_completion": False,
+            }
+
         # Restore session memory (server-side takes priority over client-sent)
         session                = self._sessions.get(conversation_id, {})
         accumulated_prefs      = session.get("user_preferences") or user_preferences or {}

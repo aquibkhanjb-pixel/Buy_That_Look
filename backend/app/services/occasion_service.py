@@ -210,8 +210,13 @@ def _detect_occasion_type(text: str) -> str:
 def _call_gemini(prompt: str, images_bytes: Optional[List[bytes]] = None,
                  model: str = _EXTRACT_MODEL) -> str:
     try:
-        from app.services.llm_service import llm_service
+        from app.services.llm_service import (
+            llm_service, is_gemini_circuit_open, report_gemini_error
+        )
         if not llm_service.is_enabled:
+            return ""
+        if is_gemini_circuit_open():
+            logger.debug("Gemini circuit breaker active — skipping occasion call")
             return ""
         client = llm_service._client
         contents: list = []
@@ -226,7 +231,8 @@ def _call_gemini(prompt: str, images_bytes: Optional[List[bytes]] = None,
         resp = client.models.generate_content(model=model, contents=contents)
         return resp.text.strip()
     except Exception as exc:
-        logger.warning(f"Gemini call failed: {exc}")
+        from app.services.llm_service import report_gemini_error
+        report_gemini_error(str(exc))
         return ""
 
 

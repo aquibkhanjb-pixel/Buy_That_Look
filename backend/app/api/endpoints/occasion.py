@@ -57,6 +57,19 @@ class SwapRequest(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+def _check_ai_available():
+    """Raise 503 with a friendly message if Gemini is permanently unavailable."""
+    from app.services.llm_service import llm_service, _perm_error
+    if not llm_service.is_enabled or _perm_error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Our AI assistant is currently offline due to an API configuration issue. "
+                "We're working on restoring it soon! Please check back later."
+            ),
+        )
+
+
 @router.post("/categories")
 def get_occasion_categories(
     body: CategoriesRequest,

@@ -28,3 +28,8 @@ datasets/
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentation / personal notes (keep only README.md on GitHub)
+/*.md
+!/README.md
+/*.html
